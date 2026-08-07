@@ -175,7 +175,7 @@ Whisper 模型下载如果中断或校验失败，脚本会自动删除当前模
 - Xcode Command Line Tools：macOS 系统自带 `xcode-select --install`
 - Homebrew：官方安装脚本 `https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh`
 - Hermes Agent：官方安装脚本 `https://hermes-agent.nousresearch.com/install.sh` / `install.ps1`
-- Hermes 配置：安装完成后会可选运行 `hermes model` 设置接口模型，并可选运行 `hermes gateway setup` 配置消息通道；飞书通道在 Hermes 当前版本支持时可在 gateway setup 中选择 Feishu / Lark。环境检测会显示 `Hermes 接口模型` 和 `Hermes 飞书 / Lark 通道` 是否已配置。飞书通道已配置时，再次运行脚本会优先提供“启动 / 查看 Gateway 服务”，不会默认重新配置飞书；只有手动选择“打开 Hermes 通道配置向导”才会进入 `hermes gateway setup`。自动模式会跳过这些交互配置，可稍后手动执行这些命令
+- Hermes 配置：安装完成后会可选运行 `hermes model` 设置接口模型，并可选运行 `hermes gateway setup` 配置消息通道；飞书通道在 Hermes 当前版本支持时可在 gateway setup 中选择 Feishu / Lark。环境检测会显示 `Hermes 接口模型` 和 `Hermes 飞书 / Lark 通道` 是否已配置，并会扫描多个 Hermes profile/config 位置以兼容不同版本的配置落点。飞书通道已配置时，再次运行脚本会优先提供“启动 / 查看 Gateway 服务”，不会默认重新配置飞书；只有手动选择“打开 Hermes 通道配置向导”才会进入 `hermes gateway setup`。自动模式会跳过这些交互配置，可稍后手动执行这些命令
   - `Select provider`：选择模型服务商；已登录 Codex CLI 时可选 `OpenAI` -> `OpenAI Codex`
   - `Import these credentials?`：是否导入已有 Codex 登录凭证，一般输入 `y`
   - `Select default model`：选择默认模型，不确定可用默认项或 `gpt-5.5`

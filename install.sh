@@ -50,6 +50,7 @@ NO_PROXY_MODE=0
 WHISPER_MODEL_INPUT=""
 YTDLP_MODULES_REQUESTED=0
 WHISPER_MODULES_REQUESTED=0
+HERMES_FEISHU_CONFIGURED_DURING_RUN=0
 
 ORIGINAL_http_proxy="${http_proxy-}"
 ORIGINAL_https_proxy="${https_proxy-}"
@@ -1183,7 +1184,9 @@ configure_hermes_agent(){
     confirm "配置 Hermes 飞书 / Lark 通道" || return
   fi
   show_hermes_gateway_guide
-  hermes gateway setup
+  if hermes gateway setup; then
+    HERMES_FEISHU_CONFIGURED_DURING_RUN=1
+  fi
 }
 
 show_hermes_model_guide(){
@@ -1253,10 +1256,19 @@ hermes_model_summary(){
 }
 
 hermes_feishu_gateway_configured(){
-  local path home file compact
+  local path home file compact roots text
+  [ "$HERMES_FEISHU_CONFIGURED_DURING_RUN" = "1" ] && return 0
   path="$(hermes_config_path)" || return 1
   home="$(dirname "$path")"
-  [ -d "$home/profiles" ] || return 1
+  roots="$home"
+  [ -d "$home/profiles" ] && roots="$roots
+$home/profiles"
+  [ -d "$HOME/.hermes" ] && roots="$roots
+$HOME/.hermes"
+  [ -d "$HOME/.hermes-home" ] && roots="$roots
+$HOME/.hermes-home"
+  [ -d "$HOME/.local/share/hermes" ] && roots="$roots
+$HOME/.local/share/hermes"
   while IFS= read -r file; do
     [ -n "$file" ] || continue
     compact="$(tr -d '[:space:]' < "$file" 2>/dev/null)"
@@ -1264,14 +1276,30 @@ hermes_feishu_gateway_configured(){
       *'"feishu":{"state":"connected"'*|*'"lark":{"state":"connected"'*) return 0 ;;
     esac
   done <<EOF
-$(find "$home/profiles" -name gateway_state.json -type f 2>/dev/null)
+$(while IFS= read -r root; do
+  [ -n "$root" ] && [ -d "$root" ] && find "$root" -name gateway_state.json -type f 2>/dev/null
+done <<ROOTS
+$roots
+ROOTS
+)
 EOF
   while IFS= read -r file; do
     [ -n "$file" ] || continue
-    compact="$(tr -d '[:space:]' < "$file" 2>/dev/null)"
+    [ "$(wc -c < "$file" 2>/dev/null || echo 9999999)" -lt 2097152 ] || continue
+    text="$(cat "$file" 2>/dev/null)"
+    compact="$(printf '%s' "$text" | tr -d '[:space:]')"
     printf '%s' "$compact" | grep -Eq '"(feishu|lark)":\[[^]]*\{' && return 0
+    printf '%s' "$text" | grep -Eiq '(feishu|lark)' &&
+      printf '%s' "$text" | grep -Eiq '(cli_[a-z0-9]+|app[_-]?id|app[_-]?secret|bot|domain[[:space:]]*[:=][[:space:]]*feishu)' &&
+      return 0
   done <<EOF
-$(find "$home/profiles" -name channel_directory.json -type f 2>/dev/null)
+$(while IFS= read -r root; do
+  [ -n "$root" ] && [ -d "$root" ] || continue
+  find "$root" -type f \( -name "*.json" -o -name "*.yaml" -o -name "*.yml" -o -name "*.toml" -o -name "*.env" -o -name "*.txt" \) 2>/dev/null
+done <<ROOTS
+$roots
+ROOTS
+)
 EOF
   return 1
 }

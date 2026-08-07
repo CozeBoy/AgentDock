@@ -113,6 +113,7 @@ function Invoke-LarkCli([string[]]$Arguments) {
   & $lark @Arguments
 }
 $LastLarkAuthStatusRaw = $null
+$script:HermesFeishuConfiguredDuringRun = $false
 function Convert-LarkJsonOutput([string]$Text) {
   if ([string]::IsNullOrWhiteSpace($Text)) { return $null }
   $clean = $Text -replace "`e\[[0-9;?]*[ -/]*[@-~]", ""
@@ -1592,7 +1593,12 @@ function Configure-HermesAgent {
     return
   }
   Show-HermesGatewayGuide
-  try { Invoke-Hermes @("gateway", "setup") } catch { Warn "Hermes 通道配置失败：$($_.Exception.Message)" }
+  try {
+    Invoke-Hermes @("gateway", "setup")
+    $script:HermesFeishuConfiguredDuringRun = $true
+  } catch {
+    Warn "Hermes 通道配置失败：$($_.Exception.Message)"
+  }
 }
 
 function Show-HermesModelGuide {
@@ -1663,21 +1669,42 @@ function Get-HermesModelSummary {
 }
 
 function Test-HermesFeishuGatewayConfigured {
+  if ($script:HermesFeishuConfiguredDuringRun) { return $true }
   $path = Get-HermesConfigPath
   if (-not $path) { return $false }
   $hermesHome = Split-Path $path -Parent
+  $scanRoots = @($hermesHome)
   $profileDir = Join-Path $hermesHome "profiles"
-  if (-not (Test-Path $profileDir)) { return $false }
+  if (Test-Path $profileDir) { $scanRoots += $profileDir }
+  $fallbackRoots = @(
+    (Join-Path $env:USERPROFILE ".hermes"),
+    (Join-Path $env:USERPROFILE ".hermes-home"),
+    (Join-Path $env:LOCALAPPDATA "hermes"),
+    (Join-Path $env:APPDATA "hermes")
+  )
+  foreach ($root in $fallbackRoots) {
+    if ($root -and (Test-Path $root)) { $scanRoots += $root }
+  }
   try {
-    $stateFiles = Get-ChildItem -Path $profileDir -Filter "gateway_state.json" -Recurse -ErrorAction SilentlyContinue
+    $stateFiles = @()
+    foreach ($root in ($scanRoots | Select-Object -Unique)) {
+      $stateFiles += Get-ChildItem -Path $root -Filter "gateway_state.json" -Recurse -ErrorAction SilentlyContinue
+    }
     foreach ($file in $stateFiles) {
       $compact = (Get-Content $file.FullName -Raw -ErrorAction SilentlyContinue) -replace '\s+', ''
       if ($compact -match '"feishu":\{[^}]*"state":"connected"' -or $compact -match '"lark":\{[^}]*"state":"connected"') { return $true }
     }
-    $files = Get-ChildItem -Path $profileDir -Filter "channel_directory.json" -Recurse -ErrorAction SilentlyContinue
+    $files = @()
+    foreach ($root in ($scanRoots | Select-Object -Unique)) {
+      $files += Get-ChildItem -Path $root -Include "*.json","*.yaml","*.yml","*.toml","*.env","*.txt" -File -Recurse -ErrorAction SilentlyContinue |
+        Where-Object { $_.Length -lt 2MB }
+    }
     foreach ($file in $files) {
-      $compact = (Get-Content $file.FullName -Raw -ErrorAction SilentlyContinue) -replace '\s+', ''
+      $text = Get-Content $file.FullName -Raw -ErrorAction SilentlyContinue
+      if ([string]::IsNullOrWhiteSpace($text)) { continue }
+      $compact = $text -replace '\s+', ''
       if ($compact -match '"feishu":\[[^\]]*\{' -or $compact -match '"lark":\[[^\]]*\{') { return $true }
+      if ($text -match '(?i)(feishu|lark)' -and $text -match '(?i)(cli_[a-z0-9]+|app[_-]?id|app[_-]?secret|bot|domain\s*[:=]\s*feishu)') { return $true }
     }
   } catch {}
   return $false
