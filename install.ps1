@@ -14,6 +14,61 @@ function Warn($Text) { Write-Host "WARN $Text" -ForegroundColor Yellow }
 function Fail($Text) { Write-Host "ERR $Text" -ForegroundColor Red }
 function Step($Text) { Write-Host ""; Write-Host "==> $Text" -ForegroundColor Cyan }
 function HasCommand($Name) { [bool](Get-Command $Name -ErrorAction SilentlyContinue) }
+function EffectsEnabled { return (-not $env:NO_COLOR) }
+
+function Show-Intro {
+  if (-not (EffectsEnabled)) { return }
+  Write-Host ""
+  Write-Host "    ___                    __  ____             __  " -ForegroundColor Cyan
+  Write-Host "   /   |  ____ ____  ____ / /_/ __ \____  _____/ /__" -ForegroundColor Cyan
+  Write-Host "  / /| | / __ `/ _ \/ __ `/ __/ / / / __ \/ ___/ //_/" -ForegroundColor Cyan
+  Write-Host " / ___ |/ /_/ /  __/ /_/ / /_/ /_/ / /_/ / /__/ ,<   " -ForegroundColor Cyan
+  Write-Host "/_/  |_|\__, /\___/\__,_/\__/_____/\____/\___/_/|_|  " -ForegroundColor Cyan
+  Write-Host "       /____/                                         " -ForegroundColor Cyan
+  $title = "AgentDock"
+  foreach ($ch in $title.ToCharArray()) {
+    Write-Host -NoNewline $ch -ForegroundColor White
+    Start-Sleep -Milliseconds 25
+  }
+  Write-Host " Agent environment bootstrap" -ForegroundColor DarkGray
+  Write-Host -NoNewline "[" -ForegroundColor DarkGray
+  for ($i = 0; $i -lt 28; $i++) {
+    Write-Host -NoNewline "#" -ForegroundColor DarkGray
+    Start-Sleep -Milliseconds 15
+  }
+  Write-Host "] ready" -ForegroundColor DarkGray
+  Write-Host ""
+}
+
+function Invoke-WithSpinner([string]$Label, [scriptblock]$Action) {
+  if (-not (EffectsEnabled)) {
+    try {
+      & $Action
+      return 0
+    } catch {
+      Write-Error $_
+      return 1
+    }
+  }
+  $job = Start-Job -ScriptBlock $Action
+  $spin = @("|", "/", "-", "\")
+  $i = 0
+  while ($job.State -eq "Running") {
+    Write-Host -NoNewline "`r$($spin[$i % $spin.Count]) $Label..." -ForegroundColor Cyan
+    $i++
+    Start-Sleep -Milliseconds 120
+  }
+  Receive-Job $job | Out-Host
+  $state = $job.State
+  $hadError = $job.ChildJobs[0].Error.Count -gt 0
+  Remove-Job $job -Force
+  if ($state -eq "Completed" -and -not $hadError) {
+    Write-Host "`rOK $Label    " -ForegroundColor Green
+    return 0
+  }
+  Write-Host "`rERR $Label    " -ForegroundColor Red
+  return 1
+}
 
 $GithubAccelerators = @(
   "https://ghfast.top/",
@@ -71,9 +126,24 @@ if ($ProxyUrl) {
 function Confirm-Step([string]$Prompt) {
   if ($Yes) { return $true }
   $ans = Read-Host "$Prompt [回车=继续 / s=跳过 / q=退出]"
-  if ($ans -match '^[qQ]$') { exit 0 }
+  if ($ans -match '^[qQ]$') { Graceful-Exit }
   if ($ans -match '^[sS]$') { return $false }
   return $true
+}
+
+function Keep-TerminalOpen {
+  if ($Yes) { return }
+  Write-Host "脚本已结束，终端将保持打开。输入 exit 后再退出。" -ForegroundColor DarkGray
+  if (Get-Command pwsh -ErrorAction SilentlyContinue) {
+    pwsh -NoExit
+  } else {
+    powershell -NoExit
+  }
+}
+
+function Graceful-Exit {
+  Keep-TerminalOpen
+  exit 0
 }
 
 function Normalize-WhisperModel([string]$Value) {
@@ -128,14 +198,21 @@ function Download-WhisperModel([string]$Model) {
 }
 
 function Invoke-WebDownload([string]$Url, [string]$OutFile) {
-  $params = @{
-    Uri = $Url
-    OutFile = $OutFile
-    UseBasicParsing = $true
-    TimeoutSec = 60
+  $proxyForJob = $ProxyUrl
+  $status = Invoke-WithSpinner "下载资源" {
+    $params = @{
+      Uri = $using:Url
+      OutFile = $using:OutFile
+      UseBasicParsing = $true
+      TimeoutSec = 60
+      ErrorAction = "Stop"
+    }
+    if ($using:proxyForJob) { $params["Proxy"] = $using:proxyForJob }
+    Invoke-WebRequest @params
   }
-  if ($ProxyUrl) { $params["Proxy"] = $ProxyUrl }
-  Invoke-WebRequest @params
+  if ($status -ne 0 -or -not (Test-Path $OutFile)) {
+    throw "下载失败：$Url"
+  }
 }
 
 function Get-UrlCandidates([string]$Url) {
@@ -421,12 +498,13 @@ function Check-All {
   if (HasCommand "ffmpeg") { Ok "ffmpeg：已安装" } else { Warn "ffmpeg：未安装" }
 }
 
+Show-Intro
 Write-Host "------------------------------------------------------------"
 Write-Host "Agent 航海环境部署工具 (Windows)"
 Write-Host "------------------------------------------------------------"
 
 Check-All
-if ($Check) { exit 0 }
+if ($Check) { Graceful-Exit }
 Install-Node
 Install-Python
 Install-Hermes
@@ -438,3 +516,4 @@ Install-Whisper
 Check-All
 Write-Host "------------------------------------------------------------"
 Ok "处理完成。新开一个 PowerShell 后，PATH 配置会完整生效。"
+Keep-TerminalOpen

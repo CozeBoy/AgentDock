@@ -19,6 +19,7 @@ err(){ printf "${RED}ERR${RST} %s\n" "$*"; }
 step(){ printf "\n${BOLD}${BLU}==> %s${RST}\n" "$*"; }
 hr(){ printf '%s\n' "------------------------------------------------------------"; }
 has_cmd(){ command -v "$1" >/dev/null 2>&1; }
+effects_enabled(){ [ -t 1 ] && [ "${NO_COLOR:-}" = "" ]; }
 
 CHECK_ONLY=0
 ASSUME_YES=0
@@ -112,10 +113,65 @@ apply_proxy_env(){
 curl_download(){
   local url="$1" out="$2"
   if [ -n "$PROXY_URL" ]; then
-    curl -fL --connect-timeout 12 --retry 2 --proxy "$PROXY_URL" "$url" -o "$out"
+    run_with_spinner "下载资源" curl -fsSL --connect-timeout 12 --retry 2 --proxy "$PROXY_URL" "$url" -o "$out"
   else
-    curl -fL --connect-timeout 12 --retry 2 "$url" -o "$out"
+    run_with_spinner "下载资源" curl -fsSL --connect-timeout 12 --retry 2 "$url" -o "$out"
   fi
+}
+
+intro_animation(){
+  effects_enabled || return
+  local title="AgentDock" subtitle="Agent environment bootstrap" i width
+  printf '\033[?25l'
+  printf '\n%s' "${CYN}"
+  printf '    ___                    __  ____             __  \n'
+  printf '   /   |  ____ ____  ____ / /_/ __ \\____  _____/ /__\n'
+  printf '  / /| | / __ `/ _ \\/ __ `/ __/ / / / __ \\/ ___/ //_/\n'
+  printf ' / ___ |/ /_/ /  __/ /_/ / /_/ /_/ / /_/ / /__/ ,<   \n'
+  printf '/_/  |_|\\__, /\\___/\\__,_/\\__/_____/\\____/\\___/_/|_|  \n'
+  printf '       /____/                                         \n'
+  printf '%s' "${RST}"
+  printf "${BOLD}"
+  for ((i=0; i<${#title}; i++)); do
+    printf '%s' "${title:i:1}"
+    sleep 0.025
+  done
+  printf "${RST} ${DIM}%s${RST}\n" "$subtitle"
+  printf "${DIM}["
+  width=28
+  for ((i=0; i<width; i++)); do
+    printf '#'
+    sleep 0.015
+  done
+  printf "] ready${RST}\n\n"
+  printf '\033[?25h'
+}
+
+run_with_spinner(){
+  local label="$1" pid status i spin
+  shift
+  if ! effects_enabled; then
+    "$@"
+    return $?
+  fi
+  "$@" &
+  pid=$!
+  i=0
+  spin='|/-\'
+  printf '\033[?25l'
+  while kill -0 "$pid" 2>/dev/null; do
+    printf '\r%s%s%s %s...' "${CYN}" "${spin:i++%4:1}" "${RST}" "$label"
+    sleep 0.12
+  done
+  wait "$pid"
+  status=$?
+  if [ "$status" -eq 0 ]; then
+    printf '\r%sOK%s %s    \n' "$GRN" "$RST" "$label"
+  else
+    printf '\r%sERR%s %s    \n' "$RED" "$RST" "$label"
+  fi
+  printf '\033[?25h'
+  return "$status"
 }
 
 github_candidates(){
@@ -176,10 +232,24 @@ confirm(){
   printf "${CYN}%s${RST} ${DIM}[回车=继续 / s=跳过 / q=退出]：${RST}" "$prompt"
   IFS= read -r ans </dev/tty 2>/dev/null
   case "$ans" in
-    q|Q) exit 0 ;;
+    q|Q) graceful_exit ;;
     s|S) return 1 ;;
     *) return 0 ;;
   esac
+}
+
+keep_terminal_open(){
+  [ "$ASSUME_YES" = "1" ] && return
+  [ -t 0 ] || [ -r /dev/tty ] || return
+  local shell_path
+  shell_path="${SHELL:-/bin/zsh}"
+  say "${DIM}脚本已结束，终端将保持打开。输入 exit 后再退出。${RST}"
+  exec "$shell_path" -l
+}
+
+graceful_exit(){
+  keep_terminal_open
+  exit 0
 }
 
 normalize_whisper_model(){
@@ -517,13 +587,14 @@ check_all(){
 }
 
 main(){
+  intro_animation
   hr
   say "${BOLD}Agent 航海环境部署工具 (macOS)${RST}"
   hr
   choose_proxy
   apply_proxy_env
   check_all
-  [ "$CHECK_ONLY" = "1" ] && exit 0
+  [ "$CHECK_ONLY" = "1" ] && graceful_exit
   install_xcode_tools
   install_homebrew
   install_node
@@ -537,6 +608,7 @@ main(){
   check_all
   hr
   ok "处理完成。新开一个终端后，PATH 配置会完整生效。"
+  keep_terminal_open
 }
 
 main "$@"

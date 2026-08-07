@@ -44,6 +44,8 @@ $env:GITHUB_ACCELERATORS_EXTRA = "https://your-proxy.example/"
 powershell -ExecutionPolicy Bypass -File .\install.ps1
 ```
 
+终端支持彩色启动动画和下载 spinner；如果要关闭动效，可以设置 `NO_COLOR=1`。
+
 安装顺序会先处理依赖环境，再安装上层工具：
 
 1. macOS 基础依赖：Xcode Command Line Tools、Homebrew
