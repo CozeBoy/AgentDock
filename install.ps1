@@ -1673,9 +1673,10 @@ function Test-HermesFeishuGatewayConfigured {
   $path = Get-HermesConfigPath
   if (-not $path) { return $false }
   $hermesHome = Split-Path $path -Parent
-  $scanRoots = @($hermesHome)
+  $scanRoots = New-Object System.Collections.Generic.List[string]
+  $scanRoots.Add($hermesHome)
   $profileDir = Join-Path $hermesHome "profiles"
-  if (Test-Path $profileDir) { $scanRoots += $profileDir }
+  if (Test-Path $profileDir) { $scanRoots.Add($profileDir) }
   $fallbackRoots = @(
     (Join-Path $env:USERPROFILE ".hermes"),
     (Join-Path $env:USERPROFILE ".hermes-home"),
@@ -1683,26 +1684,50 @@ function Test-HermesFeishuGatewayConfigured {
     (Join-Path $env:APPDATA "hermes")
   )
   foreach ($root in $fallbackRoots) {
-    if ($root -and (Test-Path $root)) { $scanRoots += $root }
+    if ($root -and (Test-Path $root)) { $scanRoots.Add($root) }
   }
   try {
-    $stateFiles = @()
+    $candidateFiles = New-Object System.Collections.Generic.List[string]
+    $patterns = @(
+      "gateway_state.json",
+      "channel_directory.json",
+      "config.yaml",
+      "config.yml",
+      "gateway.json",
+      "channels.json",
+      ".env"
+    )
+    $rootsToCheck = New-Object System.Collections.Generic.List[string]
     foreach ($root in ($scanRoots | Select-Object -Unique)) {
-      $stateFiles += Get-ChildItem -Path $root -Filter "gateway_state.json" -Recurse -ErrorAction SilentlyContinue
+      if (-not (Test-Path $root)) { continue }
+      $rootsToCheck.Add($root)
+      $profiles = Join-Path $root "profiles"
+      if (Test-Path $profiles) { $rootsToCheck.Add($profiles) }
+      foreach ($dir in (Get-ChildItem -Path $profiles -Directory -ErrorAction SilentlyContinue | Select-Object -First 30)) {
+        $rootsToCheck.Add($dir.FullName)
+        foreach ($child in (Get-ChildItem -Path $dir.FullName -Directory -ErrorAction SilentlyContinue | Select-Object -First 20)) {
+          $rootsToCheck.Add($child.FullName)
+        }
+      }
     }
-    foreach ($file in $stateFiles) {
-      $compact = (Get-Content $file.FullName -Raw -ErrorAction SilentlyContinue) -replace '\s+', ''
-      if ($compact -match '"feishu":\{[^}]*"state":"connected"' -or $compact -match '"lark":\{[^}]*"state":"connected"') { return $true }
+    foreach ($root in ($rootsToCheck | Select-Object -Unique | Select-Object -First 120)) {
+      foreach ($pattern in $patterns) {
+        $filePath = Join-Path $root $pattern
+        if (Test-Path $filePath) { $candidateFiles.Add($filePath) }
+      }
+      foreach ($file in (Get-ChildItem -Path $root -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -match '(?i)(feishu|lark|gateway|channel|config|secret)' -and $_.Length -lt 2MB } |
+        Select-Object -First 20)) {
+        $candidateFiles.Add($file.FullName)
+      }
     }
-    $files = @()
-    foreach ($root in ($scanRoots | Select-Object -Unique)) {
-      $files += Get-ChildItem -Path $root -Include "*.json","*.yaml","*.yml","*.toml","*.env","*.txt" -File -Recurse -ErrorAction SilentlyContinue |
-        Where-Object { $_.Length -lt 2MB }
-    }
-    foreach ($file in $files) {
-      $text = Get-Content $file.FullName -Raw -ErrorAction SilentlyContinue
+    foreach ($filePath in ($candidateFiles | Select-Object -Unique | Select-Object -First 200)) {
+      $item = Get-Item $filePath -ErrorAction SilentlyContinue
+      if (-not $item -or $item.Length -ge 2MB) { continue }
+      $text = Get-Content $filePath -Raw -ErrorAction SilentlyContinue
       if ([string]::IsNullOrWhiteSpace($text)) { continue }
       $compact = $text -replace '\s+', ''
+      if ($compact -match '"feishu":\{[^}]*"state":"connected"' -or $compact -match '"lark":\{[^}]*"state":"connected"') { return $true }
       if ($compact -match '"feishu":\[[^\]]*\{' -or $compact -match '"lark":\[[^\]]*\{') { return $true }
       if ($text -match '(?i)(feishu|lark)' -and $text -match '(?i)(cli_[a-z0-9]+|app[_-]?id|app[_-]?secret|bot|domain\s*[:=]\s*feishu)') { return $true }
     }

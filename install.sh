@@ -1256,7 +1256,7 @@ hermes_model_summary(){
 }
 
 hermes_feishu_gateway_configured(){
-  local path home file compact roots text
+  local path home file compact roots text candidates
   [ "$HERMES_FEISHU_CONFIGURED_DURING_RUN" = "1" ] && return 0
   path="$(hermes_config_path)" || return 1
   home="$(dirname "$path")"
@@ -1277,12 +1277,31 @@ $HOME/.local/share/hermes"
     esac
   done <<EOF
 $(while IFS= read -r root; do
-  [ -n "$root" ] && [ -d "$root" ] && find "$root" -name gateway_state.json -type f 2>/dev/null
+  [ -n "$root" ] && [ -d "$root" ] && find "$root" -maxdepth 4 -name gateway_state.json -type f 2>/dev/null | head -40
 done <<ROOTS
 $roots
 ROOTS
 )
 EOF
+  candidates="$(while IFS= read -r root; do
+  [ -n "$root" ] && [ -d "$root" ] || continue
+  find "$root" -maxdepth 4 -type f \( \
+    -name "gateway_state.json" -o \
+    -name "channel_directory.json" -o \
+    -name "config.yaml" -o \
+    -name "config.yml" -o \
+    -name "gateway.json" -o \
+    -name "channels.json" -o \
+    -name ".env" -o \
+    -iname "*feishu*" -o \
+    -iname "*lark*" -o \
+    -iname "*gateway*" -o \
+    -iname "*channel*" \
+  \) 2>/dev/null | head -80
+done <<ROOTS
+$roots
+ROOTS
+)"
   while IFS= read -r file; do
     [ -n "$file" ] || continue
     [ "$(wc -c < "$file" 2>/dev/null || echo 9999999)" -lt 2097152 ] || continue
@@ -1293,13 +1312,7 @@ EOF
       printf '%s' "$text" | grep -Eiq '(cli_[a-z0-9]+|app[_-]?id|app[_-]?secret|bot|domain[[:space:]]*[:=][[:space:]]*feishu)' &&
       return 0
   done <<EOF
-$(while IFS= read -r root; do
-  [ -n "$root" ] && [ -d "$root" ] || continue
-  find "$root" -type f \( -name "*.json" -o -name "*.yaml" -o -name "*.yml" -o -name "*.toml" -o -name "*.env" -o -name "*.txt" \) 2>/dev/null
-done <<ROOTS
-$roots
-ROOTS
-)
+$candidates
 EOF
   return 1
 }
