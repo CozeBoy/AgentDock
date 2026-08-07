@@ -27,6 +27,18 @@ PROXY_INPUT=""
 NO_PROXY_MODE=0
 WHISPER_MODEL_INPUT=""
 
+ORIGINAL_http_proxy="${http_proxy-}"
+ORIGINAL_https_proxy="${https_proxy-}"
+ORIGINAL_HTTP_PROXY="${HTTP_PROXY-}"
+ORIGINAL_HTTPS_PROXY="${HTTPS_PROXY-}"
+ORIGINAL_ALL_PROXY="${ALL_PROXY-}"
+PROXY_ENV_APPLIED=0
+NPM_PROXY_CHANGED=0
+ORIGINAL_NPM_PROXY=""
+ORIGINAL_NPM_HTTPS_PROXY=""
+GIT_HTTPS_REWRITE_APPLIED=0
+ORIGINAL_GIT_INSTEADOF=""
+
 while [ $# -gt 0 ]; do
   case "$1" in
     --check) CHECK_ONLY=1 ;;
@@ -107,7 +119,56 @@ apply_proxy_env(){
   export HTTP_PROXY="$PROXY_URL"
   export HTTPS_PROXY="$PROXY_URL"
   export ALL_PROXY="$PROXY_URL"
+  PROXY_ENV_APPLIED=1
   ok "已启用代理：$PROXY_URL"
+}
+
+restore_var(){
+  local name="$1" value="$2"
+  if [ -n "$value" ]; then
+    export "$name=$value"
+  else
+    unset "$name"
+  fi
+}
+
+cleanup_proxy(){
+  [ "$PROXY_ENV_APPLIED" = "1" ] || [ "$NPM_PROXY_CHANGED" = "1" ] || return
+  restore_var http_proxy "$ORIGINAL_http_proxy"
+  restore_var https_proxy "$ORIGINAL_https_proxy"
+  restore_var HTTP_PROXY "$ORIGINAL_HTTP_PROXY"
+  restore_var HTTPS_PROXY "$ORIGINAL_HTTPS_PROXY"
+  restore_var ALL_PROXY "$ORIGINAL_ALL_PROXY"
+  if [ "$NPM_PROXY_CHANGED" = "1" ] && has_cmd npm; then
+    if [ -n "$ORIGINAL_NPM_PROXY" ]; then npm config set proxy "$ORIGINAL_NPM_PROXY" >/dev/null 2>&1; else npm config delete proxy >/dev/null 2>&1; fi
+    if [ -n "$ORIGINAL_NPM_HTTPS_PROXY" ]; then npm config set https-proxy "$ORIGINAL_NPM_HTTPS_PROXY" >/dev/null 2>&1; else npm config delete https-proxy >/dev/null 2>&1; fi
+  fi
+  restore_git_https_rewrite
+  ok "已恢复安装前的代理环境"
+  PROXY_ENV_APPLIED=0
+  NPM_PROXY_CHANGED=0
+}
+
+trap cleanup_proxy EXIT
+
+enable_git_https_rewrite(){
+  has_cmd git || return
+  ORIGINAL_GIT_INSTEADOF="$(git config --global --get url.https://github.com/.insteadOf 2>/dev/null)"
+  git config --global url.https://github.com/.insteadOf git@github.com: >/dev/null 2>&1
+  GIT_HTTPS_REWRITE_APPLIED=1
+  ok "已临时设置 Git：git@github.com: 将改走 https://github.com/"
+}
+
+restore_git_https_rewrite(){
+  [ "$GIT_HTTPS_REWRITE_APPLIED" = "1" ] || return
+  has_cmd git || return
+  if [ -n "$ORIGINAL_GIT_INSTEADOF" ]; then
+    git config --global url.https://github.com/.insteadOf "$ORIGINAL_GIT_INSTEADOF" >/dev/null 2>&1
+  else
+    git config --global --unset url.https://github.com/.insteadOf >/dev/null 2>&1
+  fi
+  GIT_HTTPS_REWRITE_APPLIED=0
+  ok "已恢复安装前的 Git URL rewrite 配置"
 }
 
 curl_download(){
@@ -254,6 +315,7 @@ keep_terminal_open(){
 }
 
 graceful_exit(){
+  cleanup_proxy
   keep_terminal_open
   exit 0
 }
@@ -314,7 +376,7 @@ download_whisper_model(){
   esac
   step "预下载 Whisper 模型：$model"
   say "${DIM}首次加载会下载模型文件，Whisper 会显示缓存和下载进度。${RST}"
-  python3 - <<PY
+  "$(python311_cmd)" - <<PY
 import whisper
 whisper.load_model("$model")
 print("Whisper model ready: $model")
@@ -342,6 +404,8 @@ add_path_once(){
 refresh_common_paths(){
   [ -d "/opt/homebrew/bin" ] && add_path_once "/opt/homebrew/bin" "Homebrew"
   [ -d "/usr/local/bin" ] && add_path_once "/usr/local/bin" "Homebrew"
+  [ -d "/opt/homebrew/opt/python@3.11/bin" ] && add_path_once "/opt/homebrew/opt/python@3.11/bin" "Python 3.11"
+  [ -d "/usr/local/opt/python@3.11/bin" ] && add_path_once "/usr/local/opt/python@3.11/bin" "Python 3.11"
   [ -d "$HOME/.local/bin" ] && add_path_once "$HOME/.local/bin" "用户命令"
   [ -d "$HOME/.hermes/bin" ] && add_path_once "$HOME/.hermes/bin" "Hermes"
   ensure_nvm_shell_init
@@ -488,23 +552,40 @@ ensure_npm_user_prefix(){
 }
 
 ensure_python(){
-  if has_cmd python3; then
-    ok "Python 已安装：$(python3 --version 2>/dev/null)"
+  if python311_cmd >/dev/null 2>&1; then
+    ok "Python 3.11 已安装：$($(python311_cmd) --version 2>/dev/null)"
     return 0
   fi
   if [ "$CHECK_ONLY" = "1" ]; then
-    warn "Python3 未安装"
+    warn "Python 3.11 未安装"
     return 1
   fi
-  confirm "安装 Python 3（Whisper 需要）" || return 1
+  warn "将并行安装 Python 3.11，不会删除或覆盖已有 Python 版本。"
+  confirm "安装 Python 3.11（Hermes Agent 和 Whisper 推荐）" || return 1
   if has_cmd brew; then
-    say "${DIM}执行：brew install python${RST}"
-    brew install python
+    say "${DIM}执行：brew install python@3.11${RST}"
+    brew install python@3.11
   else
     warn "未检测到 Homebrew，无法自动安装 Python；请稍后手动安装或先安装 Homebrew"
     return 1
   fi
   refresh_common_paths
+}
+
+python311_cmd(){
+  if has_cmd python3.11; then
+    printf '%s\n' "python3.11"
+    return 0
+  fi
+  if [ -x "/opt/homebrew/opt/python@3.11/bin/python3.11" ]; then
+    printf '%s\n' "/opt/homebrew/opt/python@3.11/bin/python3.11"
+    return 0
+  fi
+  if [ -x "/usr/local/opt/python@3.11/bin/python3.11" ]; then
+    printf '%s\n' "/usr/local/opt/python@3.11/bin/python3.11"
+    return 0
+  fi
+  return 1
 }
 
 ensure_ffmpeg(){
@@ -527,6 +608,7 @@ install_hermes(){
   [ "$CHECK_ONLY" = "1" ] && { warn "Hermes 未安装"; return; }
   confirm "安装 Hermes Agent" || return
   curl_download "https://hermes-agent.nousresearch.com/install.sh" "$TMPDIR/hermes-install.sh" &&
+    enable_git_https_rewrite &&
     bash "$TMPDIR/hermes-install.sh"
   add_path_once "$HOME/.local/bin" "Hermes"
   add_path_once "$HOME/.hermes/bin" "Hermes"
@@ -595,8 +677,13 @@ install_lark_cli(){
   confirm "安装飞书 / Lark CLI" || return
   ensure_npm_user_prefix
   [ -n "$PROXY_URL" ] && {
+    ORIGINAL_NPM_PROXY="$(npm config get proxy 2>/dev/null)"
+    [ "$ORIGINAL_NPM_PROXY" = "null" ] && ORIGINAL_NPM_PROXY=""
+    ORIGINAL_NPM_HTTPS_PROXY="$(npm config get https-proxy 2>/dev/null)"
+    [ "$ORIGINAL_NPM_HTTPS_PROXY" = "null" ] && ORIGINAL_NPM_HTTPS_PROXY=""
     npm config set proxy "$PROXY_URL" >/dev/null 2>&1
     npm config set https-proxy "$PROXY_URL" >/dev/null 2>&1
+    NPM_PROXY_CHANGED=1
   }
   npm install -g @larksuite/cli
   local npm_bin
@@ -607,14 +694,14 @@ install_lark_cli(){
 }
 
 install_python(){
-  step "Python 3"
+  step "Python 3.11"
   ensure_python
 }
 
 install_whisper(){
   step "Whisper"
   local whisper_installed=0
-  if python3 -m whisper --help >/dev/null 2>&1 || has_cmd whisper; then
+  if { python311_cmd >/dev/null 2>&1 && "$(python311_cmd)" -m whisper --help >/dev/null 2>&1; } || has_cmd whisper; then
     ok "Whisper 已安装"
     whisper_installed=1
   fi
@@ -624,13 +711,13 @@ install_whisper(){
   ensure_ffmpeg
   if [ "$whisper_installed" = "0" ]; then
     confirm "安装 Whisper（openai-whisper Python 包）" || return
-    say "${DIM}执行：python3 -m pip install --user --upgrade pip${RST}"
-    python3 -m pip install --user --upgrade pip
-    say "${DIM}执行：python3 -m pip install --user --upgrade openai-whisper${RST}"
-    python3 -m pip install --user --upgrade openai-whisper
+    say "${DIM}执行：$(python311_cmd) -m pip install --user --upgrade pip${RST}"
+    "$(python311_cmd)" -m pip install --user --upgrade pip
+    say "${DIM}执行：$(python311_cmd) -m pip install --user --upgrade openai-whisper${RST}"
+    "$(python311_cmd)" -m pip install --user --upgrade openai-whisper
   fi
   local python_user_bin
-  python_user_bin="$(python3 -m site --user-base 2>/dev/null)/bin"
+  python_user_bin="$("$(python311_cmd)" -m site --user-base 2>/dev/null)/bin"
   add_path_once "$python_user_bin" "Python 用户命令"
   refresh_common_paths
   choose_whisper_model
@@ -645,13 +732,13 @@ check_all(){
   xcode-select -p >/dev/null 2>&1 && ok "Xcode Command Line Tools：已安装" || warn "Xcode Command Line Tools：未安装"
   has_cmd nvm && ok "nvm：已检测到" || warn "nvm：未检测到"
   has_cmd node && ok "Node.js：$(node -v 2>/dev/null)" || warn "Node.js：未安装"
-  has_cmd python3 && ok "Python：$(python3 --version 2>/dev/null)" || warn "Python：未安装"
+  python311_cmd >/dev/null 2>&1 && ok "Python 3.11：$($(python311_cmd) --version 2>/dev/null)" || warn "Python 3.11：未安装"
   has_cmd hermes && ok "Hermes：$(hermes --version 2>/dev/null | head -1)" || warn "Hermes：未安装"
   has_cmd codex && ok "Codex CLI：$(codex --version 2>/dev/null | head -1)" || warn "Codex CLI：未安装"
   detect_codex_desktop >/dev/null 2>&1 && ok "ChatGPT / Codex Desktop：$(detect_codex_desktop)" || warn "ChatGPT / Codex Desktop：未检测到"
   has_cmd lark-cli && ok "lark-cli：$(lark-cli --version 2>/dev/null | head -1)" || warn "lark-cli：未安装"
   has_cmd ffmpeg && ok "ffmpeg：已安装" || warn "ffmpeg：未安装"
-  has_cmd whisper || python3 -m whisper --help >/dev/null 2>&1 && ok "Whisper：已安装" || warn "Whisper：未安装"
+  has_cmd whisper || { python311_cmd >/dev/null 2>&1 && "$(python311_cmd)" -m whisper --help >/dev/null 2>&1; } && ok "Whisper：已安装" || warn "Whisper：未安装"
 }
 
 main(){
@@ -677,6 +764,7 @@ main(){
   check_all
   hr
   ok "处理完成。新开一个终端后，PATH 配置会完整生效。"
+  cleanup_proxy
   keep_terminal_open
 }
 

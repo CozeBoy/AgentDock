@@ -9,7 +9,7 @@
 - Codex CLI
 - Node.js
 - 飞书 / Lark CLI
-- Python 3
+- Python 3.11
 - Whisper
 
 脚本支持 HTTP 代理下载，内置常用本地代理选项：
@@ -25,6 +25,12 @@
 - `127.0.0.1:7890`
 - `http://127.0.0.1:7890`
 - 留空表示不使用代理
+
+启用代理后，脚本会设置 `HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY` 以及小写版本 `http_proxy`、`https_proxy`、`all_proxy`，下载主脚本和调用 Hermes/Codex 等子安装器时都会继承这些环境变量。第三方子安装器内部如果使用尊重这些环境变量的工具（如 PowerShell、curl、pip、uv、npm 等），通常会继续走代理。
+
+脚本会在正常完成或通过 `q` 退出时恢复安装前的代理环境变量；临时写入的 npm `proxy` / `https-proxy` 配置也会恢复。
+
+安装 Hermes Agent 时会临时设置 Git URL rewrite，让 `git@github.com:` 优先改走 `https://github.com/`，避免 SSH 22 端口在代理/国内网络下卡住；脚本结束时会恢复安装前的 Git 配置。
 
 GitHub 资源下载会自动尝试多个中国镜像 / 加速源，适合国内网络环境。内置候选包括：
 
@@ -57,9 +63,10 @@ macOS 也会维护 PATH：安装模式会写入 Homebrew、`~/.local/bin`、Herm
 安装顺序会先处理依赖环境，再安装上层工具：
 
 1. macOS 基础依赖：Xcode Command Line Tools、Homebrew
-2. 通用运行环境：nvm / Node.js、Python
-3. Agent 工具：Hermes Agent、Codex CLI、ChatGPT / Codex Desktop、飞书 CLI
-4. Whisper 依赖与工具：ffmpeg、Whisper
+2. 通用运行环境：nvm / Node.js、Python 3.11
+3. Hermes/Whisper 依赖：ffmpeg、ripgrep（Windows）
+4. Agent 工具：Hermes Agent、Codex CLI、ChatGPT / Codex Desktop、飞书 CLI
+5. Whisper
 
 ## macOS
 
@@ -134,6 +141,7 @@ Windows:
 - ChatGPT / Codex Desktop：macOS 检查 `/Applications/ChatGPT.app` 和 `/Applications/Codex.app`；Windows 检查 Appx 包、WindowsApps 下的 `OpenAI.Codex_*\\app\\ChatGPT.exe`、常见本地安装目录
 - Node.js：macOS 会先加载已有 nvm，再优先 Homebrew，否则使用 nvm；Windows 会先加载常见 nvm-windows 路径，否则下载官方 Node.js LTS zip；管理员 PowerShell 安装到 `C:\Program Files\nodejs` 并写入系统 PATH，非管理员回退到用户目录并写入用户 PATH
 - 飞书 CLI：npm 包 `@larksuite/cli`
-- Python 3：macOS 优先 Homebrew；Windows 下载 python.org 官方安装器并执行用户静默安装
-- ffmpeg：macOS 使用 Homebrew；Windows 下载 gyan.dev 官方 zip 并解压到用户目录
+- Python 3.11：Hermes Agent 明确检查 Python 3.11；脚本会并行安装 Python 3.11，不会删除或覆盖已有 Python 版本；macOS 优先 Homebrew；Windows 下载 python.org 官方 Python 3.11 安装器
+- ffmpeg：macOS 使用 Homebrew；Windows 下载 gyan.dev 官方 zip 并解压到系统/用户目录
+- ripgrep：Windows 会在 Hermes Agent 前预装 ripgrep，避免 Hermes 子安装器再走 winget
 - Whisper：Python 包 `openai-whisper`，模型支持 `fast/turbo`、`normal/base`、`tiny`、`small`、`medium`、`large`

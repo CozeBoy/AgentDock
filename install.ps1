@@ -10,6 +10,21 @@ $ErrorActionPreference = "Continue"
 $ProgressPreference = "SilentlyContinue"
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
+$OriginalProxyEnv = @{
+  HTTP_PROXY = $env:HTTP_PROXY
+  HTTPS_PROXY = $env:HTTPS_PROXY
+  ALL_PROXY = $env:ALL_PROXY
+  http_proxy = $env:http_proxy
+  https_proxy = $env:https_proxy
+  all_proxy = $env:all_proxy
+}
+$ProxyEnvApplied = $false
+$NpmProxyChanged = $false
+$OriginalNpmProxy = $null
+$OriginalNpmHttpsProxy = $null
+$GitHttpsRewriteApplied = $false
+$OriginalGitInsteadOf = $null
+
 function Say($Text) { Write-Host $Text }
 function Ok($Text) { Write-Host "OK $Text" -ForegroundColor Green }
 function Warn($Text) { Write-Host "WARN $Text" -ForegroundColor Yellow }
@@ -120,9 +135,56 @@ if ($ProxyUrl) {
   $env:HTTP_PROXY = $ProxyUrl
   $env:HTTPS_PROXY = $ProxyUrl
   $env:ALL_PROXY = $ProxyUrl
+  $env:http_proxy = $ProxyUrl
+  $env:https_proxy = $ProxyUrl
+  $env:all_proxy = $ProxyUrl
+  $script:ProxyEnvApplied = $true
   Ok "已启用代理：$ProxyUrl"
+  Say "子安装器将继承代理环境变量：HTTP_PROXY / HTTPS_PROXY / ALL_PROXY"
 } else {
   Warn "未启用代理"
+}
+
+function Restore-ProxyEnvironment {
+  if ($script:ProxyEnvApplied) {
+    foreach ($key in $script:OriginalProxyEnv.Keys) {
+      $value = $script:OriginalProxyEnv[$key]
+      if ([string]::IsNullOrEmpty($value)) {
+        Remove-Item "Env:$key" -ErrorAction SilentlyContinue
+      } else {
+        Set-Item "Env:$key" $value
+      }
+    }
+  }
+  if ($script:NpmProxyChanged -and (HasCommand "npm")) {
+    if ($script:OriginalNpmProxy) { npm config set proxy $script:OriginalNpmProxy | Out-Null } else { npm config delete proxy | Out-Null }
+    if ($script:OriginalNpmHttpsProxy) { npm config set https-proxy $script:OriginalNpmHttpsProxy | Out-Null } else { npm config delete https-proxy | Out-Null }
+  }
+  Restore-GitHttpsRewrite
+  if ($script:ProxyEnvApplied -or $script:NpmProxyChanged) {
+    Ok "已恢复安装前的代理环境"
+  }
+  $script:ProxyEnvApplied = $false
+  $script:NpmProxyChanged = $false
+}
+
+function Enable-GitHttpsRewrite {
+  if (-not (HasCommand "git")) { return }
+  $script:OriginalGitInsteadOf = (git config --global --get url.https://github.com/.insteadOf 2>$null)
+  git config --global url.https://github.com/.insteadOf git@github.com: | Out-Null
+  $script:GitHttpsRewriteApplied = $true
+  Ok "已临时设置 Git：git@github.com: 将改走 https://github.com/"
+}
+
+function Restore-GitHttpsRewrite {
+  if (-not $script:GitHttpsRewriteApplied -or -not (HasCommand "git")) { return }
+  if ($script:OriginalGitInsteadOf) {
+    git config --global url.https://github.com/.insteadOf $script:OriginalGitInsteadOf | Out-Null
+  } else {
+    git config --global --unset url.https://github.com/.insteadOf 2>$null
+  }
+  $script:GitHttpsRewriteApplied = $false
+  Ok "已恢复安装前的 Git URL rewrite 配置"
 }
 
 function Confirm-Step([string]$Prompt) {
@@ -146,6 +208,7 @@ function Keep-TerminalOpen {
 }
 
 function Graceful-Exit {
+  Restore-ProxyEnvironment
   Keep-TerminalOpen
   exit 0
 }
@@ -539,37 +602,78 @@ function Load-NvmIfPresent {
 }
 
 function Ensure-Python {
-  if (HasCommand "python") { Ok "Python 已安装"; return $true }
-  if ($Check) { Warn "Python 未安装"; return $false }
-  if (-not (Confirm-Step "安装 Python 3（Whisper 需要）")) { return $false }
-  Install-PythonFromOfficialInstaller
-  return (HasCommand "python")
+  return (Ensure-Python311)
 }
 
-function Get-PythonInstallerUrl {
+function Ensure-Python311 {
+  $python311 = Get-Python311Command
+  if ($python311) {
+    Ok "Python 3.11 已安装：$(Get-Python311Version $python311)"
+    return $true
+  }
+  if ($Check) { Warn "Python 3.11 未安装"; return $false }
+  Warn "将并行安装 Python 3.11，不会删除或覆盖已有 Python 版本。"
+  if (-not (Confirm-Step "安装 Python 3.11（Hermes Agent 和 Whisper 推荐）")) { return $false }
+  Install-PythonFromOfficialInstaller "3.11"
+  $python311 = Get-Python311Command
+  return [bool]$python311
+}
+
+function Get-Python311Command {
+  if (HasCommand "py") {
+    try {
+      py -3.11 --version *> $null
+      if ($LASTEXITCODE -eq 0) { return "py -3.11" }
+    } catch {}
+  }
+  $candidates = @(
+    "$env:ProgramFiles\Python311\python.exe",
+    "$env:LOCALAPPDATA\Programs\Python\Python311\python.exe"
+  )
+  foreach ($candidate in $candidates) {
+    if (Test-Path $candidate) { return $candidate }
+  }
+  if (HasCommand "python") {
+    try {
+      $version = (& python -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>$null)
+      if ($version -eq "3.11") { return "python" }
+    } catch {}
+  }
+  return $null
+}
+
+function Get-Python311Version([string]$Command) {
+  if ($Command -eq "py -3.11") {
+    return (py -3.11 --version)
+  }
+  return (& $Command --version)
+}
+
+function Get-PythonInstallerUrl([string]$MinorVersion) {
+  $archSuffix = if ((Get-WindowsArchName) -eq "arm64") { "arm64" } else { "amd64" }
   $pageFile = Join-Path $env:TEMP "python-windows.html"
   Invoke-WebDownload "https://www.python.org/downloads/windows/" $pageFile
   $html = Get-Content $pageFile -Raw
-  $archSuffix = if ((Get-WindowsArchName) -eq "arm64") { "arm64" } else { "amd64" }
-  $pattern = "https://www\.python\.org/ftp/python/(\d+\.\d+\.\d+)/python-\1-$archSuffix\.exe"
+  $escapedMinor = [regex]::Escape($MinorVersion)
+  $pattern = "https://www\.python\.org/ftp/python/($escapedMinor\.\d+)/python-\1-$archSuffix\.exe"
   $matches = [regex]::Matches($html, $pattern)
   if ($matches.Count -gt 0) { return $matches[0].Value }
-  if ($archSuffix -eq "amd64") {
-    return "https://www.python.org/ftp/python/3.12.10/python-3.12.10-amd64.exe"
+  if ($MinorVersion -eq "3.11" -and $archSuffix -eq "amd64") {
+    return "https://www.python.org/ftp/python/3.11.9/python-3.11.9-amd64.exe"
   }
   throw "未找到适合当前系统的 Python 安装包"
 }
 
-function Install-PythonFromOfficialInstaller {
-  $installerUrl = Get-PythonInstallerUrl
+function Install-PythonFromOfficialInstaller([string]$MinorVersion) {
+  $installerUrl = Get-PythonInstallerUrl $MinorVersion
   $installer = Join-Path $env:TEMP ([IO.Path]::GetFileName($installerUrl))
   Say "准备下载 Python 官方安装器：$installerUrl"
   Invoke-WebDownload $installerUrl $installer
   if (Test-IsAdministrator) {
-    Say "执行：Python 系统静默安装（包含 pip，并写入系统 PATH）"
+    Say "执行：Python 3.11 系统静默安装（并行安装，包含 pip，并写入系统 PATH）"
     $args = "/quiet InstallAllUsers=1 PrependPath=1 Include_pip=1 Include_launcher=1 SimpleInstall=1"
   } else {
-    Say "执行：Python 用户静默安装（包含 pip，并写入用户 PATH）"
+    Say "执行：Python 3.11 用户静默安装（并行安装，包含 pip，并写入用户 PATH）"
     $args = "/quiet InstallAllUsers=0 PrependPath=1 Include_pip=1 Include_launcher=1 SimpleInstall=1"
   }
   $process = Start-Process -FilePath $installer -ArgumentList $args -Wait -PassThru
@@ -581,9 +685,9 @@ function Install-PythonFromOfficialInstaller {
 function Register-PythonPaths {
   $candidateRoots = @(
     "$env:ProgramFiles\Python",
+    "$env:ProgramFiles\Python311",
     "$env:ProgramFiles\Python313",
     "$env:ProgramFiles\Python312",
-    "$env:ProgramFiles\Python311",
     "$env:LOCALAPPDATA\Programs\Python",
     "$env:APPDATA\Python"
   ) | Where-Object { $_ -and (Test-Path $_) }
@@ -602,6 +706,43 @@ function Ensure-Ffmpeg {
   if (-not (Confirm-Step "安装 ffmpeg（Whisper 处理音频需要）")) { return $false }
   Install-FfmpegFromOfficialZip
   return (HasCommand "ffmpeg")
+}
+
+function Ensure-Ripgrep {
+  if (HasCommand "rg") { Ok "ripgrep 已安装：$(rg --version | Select-Object -First 1)"; return $true }
+  if ($Check) { Warn "ripgrep 未安装"; return $false }
+  if (-not (Confirm-Step "安装 ripgrep（Hermes Agent 文件搜索依赖）")) { return $false }
+  Install-RipgrepFromGithubZip
+  return (HasCommand "rg")
+}
+
+function Install-RipgrepFromGithubZip {
+  $arch = Get-WindowsArchName
+  if ($arch -ne "x64") {
+    Warn "暂未自动匹配 ripgrep $arch 架构，跳过自动安装"
+    return
+  }
+  $version = "14.1.1"
+  $zipUrl = "https://github.com/BurntSushi/ripgrep/releases/download/$version/ripgrep-$version-x86_64-pc-windows-msvc.zip"
+  $zipFile = Join-Path $env:TEMP "ripgrep-$version-x86_64-pc-windows-msvc.zip"
+  $targetRoot = Get-InstallRoot "ripgrep"
+  if (-not (Test-IsAdministrator)) { Warn "当前不是管理员，ripgrep 将安装到用户目录：$targetRoot" }
+  Say "准备下载 ripgrep：$zipUrl"
+  Download-WithFallback $zipUrl $zipFile | Out-Null
+  Remove-Item $targetRoot -Recurse -Force -ErrorAction SilentlyContinue
+  New-Item -ItemType Directory -Force -Path $targetRoot | Out-Null
+  Say "解压 ripgrep..."
+  Expand-Archive -Path $zipFile -DestinationPath $targetRoot -Force
+  $rgExe = Get-ChildItem -Path $targetRoot -Filter "rg.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+  if (-not $rgExe) { throw "ripgrep 解压后未找到 rg.exe" }
+  $binDir = $rgExe.Directory.FullName
+  if (Test-IsAdministrator) {
+    Add-MachinePath $binDir
+    Ok "ripgrep 已安装到系统目录：$binDir"
+  } else {
+    Add-UserPath $binDir
+    Ok "ripgrep 已安装到用户目录：$binDir"
+  }
 }
 
 function Install-FfmpegFromOfficialZip {
@@ -631,15 +772,32 @@ function Install-Hermes {
   Step "Hermes Agent"
   if (HasCommand "hermes") { Ok "Hermes 已安装：$(hermes --version | Select-Object -First 1)"; return }
   if ($Check) { Warn "Hermes 未安装"; return }
+  $missing = Get-HermesMissingPrereqs
+  if ($missing.Count -gt 0) {
+    Warn "Hermes 前置依赖仍缺失：$($missing -join ', ')"
+    Warn "如果继续，Hermes 官方安装器可能会自行调用 uv/winget 下载这些依赖，速度可能很慢且不一定走代理。"
+    if (-not (Confirm-Step "仍然继续安装 Hermes Agent")) { return }
+  }
   if (-not (Confirm-Step "安装 Hermes Agent")) { return }
   $script = Join-Path $env:TEMP "hermes-install.ps1"
   try {
     Invoke-WebDownload "https://hermes-agent.nousresearch.com/install.ps1" $script
+    if ($ProxyUrl) { Say "Hermes 子安装器将继承代理：$ProxyUrl" }
+    Enable-GitHttpsRewrite
     powershell -ExecutionPolicy Bypass -File $script
     Register-ToolPaths
   } catch {
     Fail "Hermes 安装脚本下载或执行失败：$($_.Exception.Message)"
   }
+}
+
+function Get-HermesMissingPrereqs {
+  $missing = New-Object System.Collections.Generic.List[string]
+  if (-not (Get-Python311Command)) { $missing.Add("Python 3.11") }
+  if (-not (HasCommand "rg")) { $missing.Add("ripgrep") }
+  if (-not (HasCommand "ffmpeg")) { $missing.Add("ffmpeg") }
+  if (-not (HasCommand "node")) { $missing.Add("Node.js") }
+  return $missing
 }
 
 function Install-CodexCli {
@@ -651,6 +809,7 @@ function Install-CodexCli {
     $env:CODEX_INSTALLER_USE_RELEASES_OPENAI_COM = "false"
     $script = Join-Path $env:TEMP "codex-install.ps1"
     Invoke-WebDownload "https://chatgpt.com/codex/install.ps1" $script
+    if ($ProxyUrl) { Say "Codex 子安装器将继承代理：$ProxyUrl" }
     powershell -ExecutionPolicy Bypass -File $script
     Register-ToolPaths
   } catch {
@@ -722,8 +881,13 @@ function Install-LarkCli {
   if (-not (Ensure-Node)) { Fail "npm 不可用，无法安装飞书 CLI"; return }
   if (-not (Confirm-Step "安装飞书 / Lark CLI")) { return }
   if ($ProxyUrl) {
+    $script:OriginalNpmProxy = (npm config get proxy 2>$null)
+    if ($script:OriginalNpmProxy -eq "null") { $script:OriginalNpmProxy = $null }
+    $script:OriginalNpmHttpsProxy = (npm config get https-proxy 2>$null)
+    if ($script:OriginalNpmHttpsProxy -eq "null") { $script:OriginalNpmHttpsProxy = $null }
     npm config set proxy $ProxyUrl | Out-Null
     npm config set https-proxy $ProxyUrl | Out-Null
+    $script:NpmProxyChanged = $true
   }
   Register-NpmGlobalPath
   npm install -g @larksuite/cli
@@ -779,8 +943,18 @@ function Register-ToolPaths {
 }
 
 function Install-Python {
-  Step "Python 3"
+  Step "Python 3.11"
   Ensure-Python | Out-Null
+}
+
+function Install-Ffmpeg {
+  Step "ffmpeg"
+  Ensure-Ffmpeg | Out-Null
+}
+
+function Install-Ripgrep {
+  Step "ripgrep"
+  Ensure-Ripgrep | Out-Null
 }
 
 function Install-Whisper {
@@ -813,13 +987,15 @@ function Check-All {
   Say "系统：Windows $([Environment]::OSVersion.Version)"
   if (HasCommand "nvm") { Ok "nvm：已检测到" } else { Warn "nvm：未检测到" }
   if (HasCommand "node") { Ok "Node.js：$(node -v)" } else { Warn "Node.js：未安装" }
-  if (HasCommand "python") { Ok "Python：$(python --version)" } else { Warn "Python：未安装" }
+  $python311 = Get-Python311Command
+  if ($python311) { Ok "Python 3.11：$(Get-Python311Version $python311)" } else { Warn "Python 3.11：未安装" }
+  if (HasCommand "ffmpeg") { Ok "ffmpeg：已安装" } else { Warn "ffmpeg：未安装" }
+  if (HasCommand "rg") { Ok "ripgrep：$(rg --version | Select-Object -First 1)" } else { Warn "ripgrep：未安装" }
   if (HasCommand "hermes") { Ok "Hermes：$(hermes --version | Select-Object -First 1)" } else { Warn "Hermes：未安装" }
   if (HasCommand "codex") { Ok "Codex CLI：$(codex --version | Select-Object -First 1)" } else { Warn "Codex CLI：未安装" }
   $desktop = Get-CodexDesktopInstall
   if ($desktop) { Ok "ChatGPT / Codex Desktop：$desktop" } else { Warn "ChatGPT / Codex Desktop：未检测到" }
   if (HasCommand "lark-cli") { Ok "lark-cli：$(lark-cli --version | Select-Object -First 1)" } else { Warn "lark-cli：未安装" }
-  if (HasCommand "ffmpeg") { Ok "ffmpeg：已安装" } else { Warn "ffmpeg：未安装" }
   if (HasCommand "whisper") { Ok "Whisper：已安装" } else { Warn "Whisper：未安装" }
 }
 
@@ -833,13 +1009,15 @@ Check-All
 if ($Check) { Graceful-Exit }
 Install-Node
 Install-Python
+Install-Ffmpeg
+Install-Ripgrep
 Install-Hermes
 Install-CodexCli
 Install-CodexDesktop
 Install-LarkCli
-Ensure-Ffmpeg | Out-Null
 Install-Whisper
 Check-All
 Write-Host "------------------------------------------------------------"
 Ok "处理完成。新开一个 PowerShell 后，PATH 配置会完整生效。"
+Restore-ProxyEnvironment
 Keep-TerminalOpen
