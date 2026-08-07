@@ -500,6 +500,23 @@ confirm(){
   esac
 }
 
+confirm_reconfigure(){
+  local prompt="$1" ans
+  [ "$ASSUME_YES" = "1" ] && return 1
+  say "${YLW}等待确认：$prompt${RST}"
+  printf "${CYN}已配置，回车跳过；输入 y 或 r 重新配置；输入 q 退出：${RST}"
+  if [ -r /dev/tty ]; then
+    IFS= read -r ans </dev/tty 2>/dev/null || ans=""
+  else
+    ans=""
+  fi
+  case "$ans" in
+    q|Q) graceful_exit ;;
+    y|Y|r|R) ok "已确认，开始处理：$prompt"; return 0 ;;
+    *) warn "已跳过：$prompt"; return 1 ;;
+  esac
+}
+
 keep_terminal_open(){
   [ "$ASSUME_YES" = "1" ] && return
   [ -t 0 ] || [ -r /dev/tty ] || return
@@ -1108,6 +1125,7 @@ install_hermes(){
 }
 
 configure_hermes_agent(){
+  local hermes_model
   step "Hermes Agent 配置"
   has_cmd hermes || { warn "Hermes 未安装，跳过配置"; return; }
   [ "$CHECK_ONLY" = "1" ] && return
@@ -1117,14 +1135,25 @@ configure_hermes_agent(){
   fi
   say "可在这里配置 Hermes 的接口模型和消息通道。"
   say "下面会进入 Hermes 自带英文向导，先看中文速查说明即可。"
-  if confirm "配置 Hermes 接口模型"; then
+  hermes_model="$(hermes_model_summary 2>/dev/null || true)"
+  if [ -n "$hermes_model" ]; then
+    ok "Hermes 接口模型已配置：$hermes_model"
+    if confirm_reconfigure "重新配置 Hermes 接口模型"; then
+      show_hermes_model_guide
+      hermes model
+    fi
+  elif confirm "配置 Hermes 接口模型"; then
     show_hermes_model_guide
     hermes model
   fi
-  if confirm "配置 Hermes 飞书 / Lark 通道"; then
-    show_hermes_gateway_guide
-    hermes gateway setup
+  if hermes_feishu_gateway_configured; then
+    ok "Hermes 飞书 / Lark 通道已配置，默认不重新配置。"
+    confirm_reconfigure "重新配置 Hermes 飞书 / Lark 通道" || return
+  else
+    confirm "配置 Hermes 飞书 / Lark 通道" || return
   fi
+  show_hermes_gateway_guide
+  hermes gateway setup
 }
 
 show_hermes_model_guide(){
@@ -1194,8 +1223,15 @@ hermes_feishu_gateway_configured(){
     [ -n "$file" ] || continue
     compact="$(tr -d '[:space:]' < "$file" 2>/dev/null)"
     case "$compact" in
-      *'"feishu":[{'*|*'"lark":[{'*) return 0 ;;
+      *'"feishu":{"state":"connected"'*|*'"lark":{"state":"connected"'*) return 0 ;;
     esac
+  done <<EOF
+$(find "$home/profiles" -name gateway_state.json -type f 2>/dev/null)
+EOF
+  while IFS= read -r file; do
+    [ -n "$file" ] || continue
+    compact="$(tr -d '[:space:]' < "$file" 2>/dev/null)"
+    printf '%s' "$compact" | grep -Eq '"(feishu|lark)":\[[^]]*\{' && return 0
   done <<EOF
 $(find "$home/profiles" -name channel_directory.json -type f 2>/dev/null)
 EOF

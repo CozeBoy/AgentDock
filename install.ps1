@@ -709,6 +709,19 @@ function Confirm-Step([string]$Prompt) {
   return $true
 }
 
+function Confirm-Reconfigure([string]$Prompt) {
+  if ($Yes) { return $false }
+  Write-Host "等待确认：$Prompt" -ForegroundColor Yellow
+  $ans = Read-Host "已配置，回车跳过；输入 y 或 r 重新配置；输入 q 退出"
+  if ($ans -match '^[qQ]$') { Graceful-Exit }
+  if ($ans -match '^[yYrR]$') {
+    Write-Host "已确认，开始处理：$Prompt" -ForegroundColor Green
+    return $true
+  }
+  Write-Host "已跳过：$Prompt" -ForegroundColor Yellow
+  return $false
+}
+
 function Keep-TerminalOpen {
   if ($Yes) { return }
   if ($env:AGENTDOCK_ELEVATED_WINDOW -eq "1") {
@@ -1538,14 +1551,26 @@ function Configure-HermesAgent {
   }
   Say "可在这里配置 Hermes 的接口模型和消息通道。"
   Say "下面会进入 Hermes 自带英文向导，先看中文速查说明即可。"
-  if (Confirm-Step "配置 Hermes 接口模型") {
+  $modelConfigured = Get-HermesModelSummary
+  if ($modelConfigured) {
+    Ok "Hermes 接口模型已配置：$modelConfigured"
+    $configureModel = Confirm-Reconfigure "重新配置 Hermes 接口模型"
+  } else {
+    $configureModel = Confirm-Step "配置 Hermes 接口模型"
+  }
+  if ($configureModel) {
     Show-HermesModelGuide
     try { Invoke-Hermes @("model") } catch { Warn "Hermes 接口模型配置失败：$($_.Exception.Message)" }
   }
-  if (Confirm-Step "配置 Hermes 飞书 / Lark 通道") {
-    Show-HermesGatewayGuide
-    try { Invoke-Hermes @("gateway", "setup") } catch { Warn "Hermes 通道配置失败：$($_.Exception.Message)" }
+  $feishuConfigured = Test-HermesFeishuGatewayConfigured
+  if ($feishuConfigured) {
+    Ok "Hermes 飞书 / Lark 通道已配置，默认不重新配置。"
+    if (-not (Confirm-Reconfigure "重新配置 Hermes 飞书 / Lark 通道")) { return }
+  } elseif (-not (Confirm-Step "配置 Hermes 飞书 / Lark 通道")) {
+    return
   }
+  Show-HermesGatewayGuide
+  try { Invoke-Hermes @("gateway", "setup") } catch { Warn "Hermes 通道配置失败：$($_.Exception.Message)" }
 }
 
 function Show-HermesModelGuide {
@@ -1614,10 +1639,15 @@ function Test-HermesFeishuGatewayConfigured {
   $profileDir = Join-Path $hermesHome "profiles"
   if (-not (Test-Path $profileDir)) { return $false }
   try {
+    $stateFiles = Get-ChildItem -Path $profileDir -Filter "gateway_state.json" -Recurse -ErrorAction SilentlyContinue
+    foreach ($file in $stateFiles) {
+      $compact = (Get-Content $file.FullName -Raw -ErrorAction SilentlyContinue) -replace '\s+', ''
+      if ($compact -match '"feishu":\{[^}]*"state":"connected"' -or $compact -match '"lark":\{[^}]*"state":"connected"') { return $true }
+    }
     $files = Get-ChildItem -Path $profileDir -Filter "channel_directory.json" -Recurse -ErrorAction SilentlyContinue
     foreach ($file in $files) {
       $compact = (Get-Content $file.FullName -Raw -ErrorAction SilentlyContinue) -replace '\s+', ''
-      if ($compact -match '"feishu":\[\{' -or $compact -match '"lark":\[\{') { return $true }
+      if ($compact -match '"feishu":\[[^\]]*\{' -or $compact -match '"lark":\[[^\]]*\{') { return $true }
     }
   } catch {}
   return $false
