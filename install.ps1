@@ -193,6 +193,19 @@ function Get-HermesCommand {
   if ($cmd) { return $cmd.Source }
   $cmd = Get-Command "hermes" -ErrorAction SilentlyContinue
   if ($cmd) { return $cmd.Source }
+  $candidates = @(
+    "$env:LOCALAPPDATA\hermes\bin\hermes.cmd",
+    "$env:LOCALAPPDATA\hermes\bin\hermes.exe",
+    "$env:USERPROFILE\.hermes\bin\hermes.cmd",
+    "$env:USERPROFILE\.hermes\bin\hermes.exe",
+    "$env:LOCALAPPDATA\Programs\Hermes\bin\hermes.cmd",
+    "$env:LOCALAPPDATA\Programs\Hermes\bin\hermes.exe",
+    "$env:ProgramFiles\Hermes\bin\hermes.cmd",
+    "$env:ProgramFiles\Hermes\bin\hermes.exe"
+  )
+  foreach ($candidate in $candidates) {
+    if ($candidate -and (Test-Path $candidate)) { return $candidate }
+  }
   return $null
 }
 function HasHermes { return [bool](Get-HermesCommand) }
@@ -1896,6 +1909,7 @@ function Register-NpmGlobalPath {
 
 function Register-ToolPaths {
   $candidates = @(
+    "$env:LOCALAPPDATA\hermes\bin",
     "$env:ProgramFiles\Hermes\bin",
     "$env:ProgramFiles\hermes\bin",
     "$env:LOCALAPPDATA\Programs\Hermes\bin",

@@ -56,7 +56,7 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1
 
 交互确认不会自动安装：按回车继续，输入 `s` 跳过当前步骤，输入 `q` 退出并保留终端窗口。如果某个环境已经安装但脚本没有检测到，建议输入 `s` 跳过。
 
-Windows 会按权限选择安装位置：管理员 PowerShell 优先安装到 `C:\Program Files` 并写入系统 PATH；非管理员回退到 `%LOCALAPPDATA%\Programs` / 用户目录并写入用户 PATH。Node.js、Python、ffmpeg、yt-dlp、npm 全局命令、Python Scripts、Hermes/Codex 常见命令目录都会刷新到当前脚本进程；新开的 PowerShell 也会继承这些路径。
+Windows 会按权限选择安装位置：Node.js、ffmpeg、yt-dlp 等由脚本直接安装的工具，管理员 PowerShell 优先安装到 `C:\Program Files` 并写入系统 PATH；非管理员回退到 `%LOCALAPPDATA%\Programs` / 用户目录并写入用户 PATH。Hermes Agent 使用官方安装器，Windows 默认用户级目录通常是 `%LOCALAPPDATA%\hermes`（例如 `C:\Users\%USERNAME%\AppData\Local\hermes`）。Node.js、Python、ffmpeg、yt-dlp、npm 全局命令、Python Scripts、Hermes/Codex 常见命令目录都会刷新到当前脚本进程；新开的 PowerShell 也会继承这些路径。
 
 Windows 如果不是管理员 PowerShell，脚本会提醒是否弹出 UAC 并以管理员身份重新运行。选择同意后会优先安装到 `C:\Program Files`；选择否，则继续使用用户目录安装。
 
@@ -174,7 +174,7 @@ Whisper 模型下载如果中断或校验失败，脚本会自动删除当前模
 
 - Xcode Command Line Tools：macOS 系统自带 `xcode-select --install`
 - Homebrew：官方安装脚本 `https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh`
-- Hermes Agent：官方安装脚本 `https://hermes-agent.nousresearch.com/install.sh` / `install.ps1`
+- Hermes Agent：官方安装脚本 `https://hermes-agent.nousresearch.com/install.sh` / `install.ps1`；Windows 官方安装器默认通常写入 `%LOCALAPPDATA%\hermes`
 - Hermes 配置：安装完成后会可选运行 `hermes model` 设置接口模型，并可选运行 `hermes gateway setup` 配置消息通道；飞书通道在 Hermes 当前版本支持时可在 gateway setup 中选择 Feishu / Lark。环境检测会显示 `Hermes 接口模型` 和 `Hermes 飞书 / Lark 通道` 是否已配置，并会扫描多个 Hermes profile/config 位置以兼容不同版本的配置落点。飞书通道已配置时，再次运行脚本会优先提供“启动 / 查看 Gateway 服务”，不会默认重新配置飞书；只有手动选择“打开 Hermes 通道配置向导”才会进入 `hermes gateway setup`。自动模式会跳过这些交互配置，可稍后手动执行这些命令
   - `Select provider`：选择模型服务商；已登录 Codex CLI 时可选 `OpenAI` -> `OpenAI Codex`
   - `Import these credentials?`：是否导入已有 Codex 登录凭证，一般输入 `y`
