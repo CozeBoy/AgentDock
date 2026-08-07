@@ -180,6 +180,7 @@ Whisper 模型下载如果中断或校验失败，脚本会自动删除当前模
   - `Import these credentials?`：是否导入已有 Codex 登录凭证，一般输入 `y`
   - `Select default model`：选择默认模型，不确定可用默认项或 `gpt-5.5`
   - `Select a platform to configure`：选择消息平台，飞书选择 `Feishu / Lark`
+  - 平台列表里的 `(not configured)` 可能只是 Hermes 外层摘要未刷新；如果进入 `Feishu / Lark` 后提示 `already configured`，说明实际配置已存在
   - 如果提示 `Gateway service is installed but not running`：通常选择启动即可，不需要重配飞书通道
   - 如果提示 `Feishu / Lark is already configured`：只有要重建配置才输入 `y`；直接回车会回到平台菜单，然后选择 `28 Done` 退出
   - `Scan QR code...`：扫码自动创建机器人，推荐默认项

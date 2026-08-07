@@ -1612,6 +1612,7 @@ function Show-HermesGatewayGuide {
   Say "即将运行：hermes gateway setup"
   Say "常见英文提示对照："
   Say "  Select a platform to configure：选择要配置的平台，选择 Feishu / Lark。"
+  Say "  平台列表里的 (not configured) 可能只是外层摘要未刷新；如果进入 Feishu / Lark 后提示 already configured，说明实际配置已存在。"
   Say "  Scan QR code...：扫码自动创建机器人，推荐选默认项。"
   Say "  Enter existing App ID...：已有飞书应用时，手动输入 App ID 和 App Secret。"
   Say "  Open this URL in Feishu / Lark on your phone：用手机飞书打开链接并授权。"

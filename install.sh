@@ -1203,6 +1203,7 @@ show_hermes_gateway_guide(){
   say "即将运行：hermes gateway setup"
   say "常见英文提示对照："
   say "  Select a platform to configure：选择要配置的平台，选择 Feishu / Lark。"
+  say "  平台列表里的 (not configured) 可能只是外层摘要未刷新；如果进入 Feishu / Lark 后提示 already configured，说明实际配置已存在。"
   say "  Scan QR code...：扫码自动创建机器人，推荐选默认项。"
   say "  Enter existing App ID...：已有飞书应用时，手动输入 App ID 和 App Secret。"
   say "  Open this URL in Feishu / Lark on your phone：用手机飞书打开链接并授权。"
