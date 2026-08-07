@@ -1230,7 +1230,13 @@ lark_auth_ready(){
   [ -n "$py" ] || return 1
   status="$(lark-cli auth status 2>&1)"
   [ -n "$status" ] || return 1
+  status="$(extract_json_object "$status")"
+  [ -n "$status" ] || return 1
   printf '%s' "$status" | "$py" -c 'import json,sys; s=json.load(sys.stdin); sys.exit(0 if s.get("identities",{}).get("user",{}).get("available") else 1)' 2>/dev/null
+}
+
+extract_json_object(){
+  printf '%s' "$1" | python3 -c 'import sys; t=sys.stdin.read(); s=t.find("{"); e=t.rfind("}"); print(t[s:e+1] if s >= 0 and e > s else "")' 2>/dev/null
 }
 
 lark_needs_bind(){
@@ -1239,6 +1245,11 @@ lark_needs_bind(){
   py="$(main_python_cmd)"
   [ -n "$py" ] || return 1
   status="$(lark-cli auth status 2>&1)"
+  [ -n "$status" ] || return 1
+  if printf '%s' "$status" | grep -Eq 'not bound to it|not bound|not_configured'; then
+    return 0
+  fi
+  status="$(extract_json_object "$status")"
   [ -n "$status" ] || return 1
   printf '%s' "$status" | "$py" -c 'import json,sys; s=json.load(sys.stdin); e=s.get("error",{}); msg=e.get("message",""); sys.exit(0 if s.get("ok") is False and e.get("subtype")=="not_configured" and ("not bound" in msg or "not configured" in msg) else 1)' 2>/dev/null
 }
@@ -1251,8 +1262,17 @@ show_lark_auth_status(){
     warn "lark-cli 授权：未检测到有效配置"
     return 1
   fi
+  if printf '%s' "$status" | grep -Eq 'not bound to it|not bound|not_configured'; then
+    warn "lark-cli 授权：检测到 Hermes 上下文，但还没有绑定到 lark-cli"
+    return 1
+  fi
   py="$(main_python_cmd)"
   if [ -n "$py" ]; then
+    status="$(extract_json_object "$status")"
+    if [ -z "$status" ]; then
+      warn "lark-cli 授权：未检测到有效配置"
+      return 1
+    fi
     if printf '%s' "$status" | "$py" -c 'import json,sys; s=json.load(sys.stdin); e=s.get("error",{}); msg=e.get("message",""); sys.exit(0 if s.get("ok") is False and e.get("subtype")=="not_configured" and ("not bound" in msg or "not configured" in msg) else 1)' 2>/dev/null; then
       warn "lark-cli 授权：检测到 Hermes 上下文，但还没有绑定到 lark-cli"
       return 1

@@ -112,28 +112,42 @@ function Invoke-LarkCli([string[]]$Arguments) {
   if (-not $lark) { throw "lark-cli 不可用" }
   & $lark @Arguments
 }
+$LastLarkAuthStatusRaw = $null
+function Convert-LarkJsonOutput([string]$Text) {
+  if ([string]::IsNullOrWhiteSpace($Text)) { return $null }
+  $clean = $Text -replace "`e\[[0-9;?]*[ -/]*[@-~]", ""
+  $start = $clean.IndexOf("{")
+  $end = $clean.LastIndexOf("}")
+  if ($start -lt 0 -or $end -le $start) { return $null }
+  $json = $clean.Substring($start, $end - $start + 1)
+  try { return ($json | ConvertFrom-Json) } catch { return $null }
+}
 function Get-LarkAuthStatus {
+  $script:LastLarkAuthStatusRaw = $null
   if (-not (HasLarkCli)) { return $null }
   try {
     $raw = Invoke-LarkCli @("auth", "status") 2>&1 | Out-String
+    $script:LastLarkAuthStatusRaw = $raw
     if ([string]::IsNullOrWhiteSpace($raw)) { return $null }
-    return ($raw | ConvertFrom-Json)
+    return (Convert-LarkJsonOutput $raw)
   } catch {
     return $null
   }
 }
 function Test-LarkCliNeedsBind($Status) {
-  if (-not $Status) { return $false }
+  if (-not $Status) {
+    return ("$script:LastLarkAuthStatusRaw" -match "not bound to it|not bound|not_configured")
+  }
   return (($Status.ok -eq $false) -and ($Status.error.subtype -eq "not_configured") -and ("$($Status.error.message)" -match "not bound|not configured|not_configured"))
 }
 function Show-LarkAuthStatus {
   $status = Get-LarkAuthStatus
-  if (-not $status) {
-    Warn "lark-cli 授权：未检测到有效配置"
-    return $false
-  }
   if (Test-LarkCliNeedsBind $status) {
     Warn "lark-cli 授权：检测到 Hermes 上下文，但还没有绑定到 lark-cli"
+    return $false
+  }
+  if (-not $status) {
+    Warn "lark-cli 授权：未检测到有效配置"
     return $false
   }
   $botReady = $status.identities.bot.available -eq $true
