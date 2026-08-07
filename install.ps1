@@ -7,7 +7,8 @@ param(
 )
 
 $ErrorActionPreference = "Continue"
-$ProgressPreference = "Continue"
+$ProgressPreference = "SilentlyContinue"
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
 function Say($Text) { Write-Host $Text }
 function Ok($Text) { Write-Host "OK $Text" -ForegroundColor Green }
@@ -149,6 +150,58 @@ function Graceful-Exit {
   exit 0
 }
 
+function Get-CurrentScriptPathForElevation {
+  if ($PSCommandPath -and (Test-Path $PSCommandPath)) { return $PSCommandPath }
+  if ($MyInvocation.MyCommand.Path -and (Test-Path $MyInvocation.MyCommand.Path)) { return $MyInvocation.MyCommand.Path }
+  $tmpScript = Join-Path $env:TEMP "AgentDock-install-elevated.ps1"
+  Say "当前脚本来自远程管道，将保存到临时文件用于管理员运行：$tmpScript"
+  Invoke-WebDownload "https://raw.githubusercontent.com/CozeBoy/AgentDock/main/install.ps1" $tmpScript
+  return $tmpScript
+}
+
+function Build-ElevationArguments([string]$ScriptPath) {
+  $parts = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$ScriptPath`"")
+  if ($Check) { $parts += "-Check" }
+  if ($Yes) { $parts += "-Yes" }
+  if ($NoProxy) { $parts += "-NoProxy" }
+  if ($ProxyUrl) { $parts += @("-Proxy", "`"$ProxyUrl`"") }
+  if ($WhisperModel) { $parts += @("-WhisperModel", "`"$WhisperModel`"") }
+  return ($parts -join " ")
+}
+
+function Suggest-Elevation {
+  if (Test-IsAdministrator) {
+    Ok "当前是管理员 PowerShell，将优先安装到 C:\Program Files 并写入系统 PATH"
+    return
+  }
+  if ($env:AGENTDOCK_ELEVATION_ATTEMPTED -eq "1") {
+    Warn "当前仍不是管理员，将安装到用户目录。"
+    return
+  }
+  if ($Yes) {
+    Warn "当前不是管理员，自动模式下不弹 UAC，将安装到用户目录。"
+    return
+  }
+  Write-Host ""
+  Warn "当前不是管理员 PowerShell。"
+  Say "推荐以管理员身份运行：Node.js、Python、ffmpeg 等会安装到 C:\Program Files，并写入系统 PATH。"
+  $ans = Read-Host "是否弹出 UAC 并以管理员身份重新运行？[Y=推荐 / n=继续用户目录安装]"
+  if ($ans -match '^[nN]$') {
+    Warn "继续使用用户目录安装。"
+    return
+  }
+  try {
+    $scriptPath = Get-CurrentScriptPathForElevation
+    $arguments = Build-ElevationArguments $scriptPath
+    $env:AGENTDOCK_ELEVATION_ATTEMPTED = "1"
+    Start-Process -FilePath "powershell" -ArgumentList $arguments -Verb RunAs
+    exit 0
+  } catch {
+    Warn "管理员重启失败：$($_.Exception.Message)"
+    Warn "将继续使用用户目录安装。"
+  }
+}
+
 function Normalize-WhisperModel([string]$Value) {
   if ([string]::IsNullOrWhiteSpace($Value)) { return "" }
   $Value = $Value.Trim().ToLowerInvariant()
@@ -201,17 +254,66 @@ function Download-WhisperModel([string]$Model) {
   python -c "import whisper; whisper.load_model('$Model'); print('Whisper model ready: $Model')"
 }
 
+function Format-ByteSize([double]$Bytes) {
+  if ($Bytes -ge 1GB) { return ("{0:N1} GB" -f ($Bytes / 1GB)) }
+  if ($Bytes -ge 1MB) { return ("{0:N1} MB" -f ($Bytes / 1MB)) }
+  if ($Bytes -ge 1KB) { return ("{0:N1} KB" -f ($Bytes / 1KB)) }
+  return ("{0:N0} B" -f $Bytes)
+}
+
+function Write-DownloadProgressLine([double]$Downloaded, [double]$Total) {
+  if ($Total -gt 0) {
+    $percent = [Math]::Min(100, ($Downloaded / $Total) * 100)
+    $line = "下载进度：{0,6:N1}%  {1} / {2}" -f $percent, (Format-ByteSize $Downloaded), (Format-ByteSize $Total)
+  } else {
+    $line = "下载进度：{0}" -f (Format-ByteSize $Downloaded)
+  }
+  Write-Host -NoNewline ("`r{0,-78}" -f $line) -ForegroundColor Cyan
+}
+
 function Invoke-WebDownload([string]$Url, [string]$OutFile) {
   Say "下载地址：$Url"
-  $params = @{
-    Uri = $Url
-    OutFile = $OutFile
-    UseBasicParsing = $true
-    TimeoutSec = 60
-    ErrorAction = "Stop"
+  Remove-Item $OutFile -Force -ErrorAction SilentlyContinue
+  $request = [System.Net.HttpWebRequest]::Create($Url)
+  $request.Method = "GET"
+  $request.UserAgent = "AgentDock Installer"
+  $request.Timeout = 60000
+  $request.ReadWriteTimeout = 60000
+  $request.AllowAutoRedirect = $true
+  if ($ProxyUrl) {
+    $request.Proxy = New-Object System.Net.WebProxy($ProxyUrl, $true)
   }
-  if ($ProxyUrl) { $params["Proxy"] = $ProxyUrl }
-  Invoke-WebRequest @params
+
+  $response = $null
+  $inputStream = $null
+  $outputStream = $null
+  try {
+    $response = $request.GetResponse()
+    $total = [double]$response.ContentLength
+    $inputStream = $response.GetResponseStream()
+    $outputStream = [System.IO.File]::Open($OutFile, [System.IO.FileMode]::Create, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
+    $buffer = New-Object byte[] 81920
+    $downloaded = [double]0
+    $lastUpdate = Get-Date
+    while (($read = $inputStream.Read($buffer, 0, $buffer.Length)) -gt 0) {
+      $outputStream.Write($buffer, 0, $read)
+      $downloaded += $read
+      if (((Get-Date) - $lastUpdate).TotalMilliseconds -ge 200) {
+        Write-DownloadProgressLine $downloaded $total
+        $lastUpdate = Get-Date
+      }
+    }
+    Write-DownloadProgressLine $downloaded $total
+    Write-Host ""
+  } catch {
+    Write-Host ""
+    Remove-Item $OutFile -Force -ErrorAction SilentlyContinue
+    throw
+  } finally {
+    if ($outputStream) { $outputStream.Dispose() }
+    if ($inputStream) { $inputStream.Dispose() }
+    if ($response) { $response.Dispose() }
+  }
   if (-not (Test-Path $OutFile)) {
     throw "下载失败：$Url"
   }
@@ -290,10 +392,58 @@ function Add-UserPath([string]$Dir) {
   Refresh-ProcessPath
 }
 
+function Add-MachinePath([string]$Dir) {
+  if (-not (Test-Path $Dir)) { return }
+  if (-not (Test-IsAdministrator)) {
+    Warn "当前不是管理员，无法写入系统 PATH，改写入用户 PATH：$Dir"
+    Add-UserPath $Dir
+    return
+  }
+  $fullDir = [IO.Path]::GetFullPath($Dir).TrimEnd("\")
+  $machinePath = [Environment]::GetEnvironmentVariable("Path", "Machine")
+  $parts = @()
+  if ($machinePath) {
+    $parts = $machinePath -split ";" | Where-Object { $_ -and $_.Trim() }
+  }
+  $exists = $false
+  foreach ($part in $parts) {
+    try {
+      if ([IO.Path]::GetFullPath($part).TrimEnd("\").Equals($fullDir, [StringComparison]::OrdinalIgnoreCase)) {
+        $exists = $true
+        break
+      }
+    } catch {}
+  }
+  if (-not $exists) {
+    [Environment]::SetEnvironmentVariable("Path", "$fullDir;$machinePath", "Machine")
+    Ok "已写入系统 PATH：$fullDir"
+  } else {
+    Ok "系统 PATH 已包含：$fullDir"
+  }
+  Refresh-ProcessPath
+}
+
 function Refresh-ProcessPath {
   $machinePath = [Environment]::GetEnvironmentVariable("Path", "Machine")
   $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
   $env:Path = "$machinePath;$userPath"
+}
+
+function Get-InstallRoot([string]$Name) {
+  if (Test-IsAdministrator) {
+    return (Join-Path $env:ProgramFiles $Name)
+  }
+  return (Join-Path $env:LOCALAPPDATA "Programs\$Name")
+}
+
+function Test-IsAdministrator {
+  try {
+    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+    $principal = New-Object Security.Principal.WindowsPrincipal($identity)
+    return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+  } catch {
+    return $false
+  }
 }
 
 function Ensure-Node {
@@ -333,7 +483,8 @@ function Install-NodeFromOfficialZip {
   $version = $release.version
   $zipUrl = "https://nodejs.org/dist/$version/node-$version-win-$arch.zip"
   $zipFile = Join-Path $env:TEMP "node-$version-win-$arch.zip"
-  $targetRoot = Join-Path $env:LOCALAPPDATA "Programs\nodejs"
+  $targetRoot = Get-InstallRoot "nodejs"
+  if (-not (Test-IsAdministrator)) { Warn "当前不是管理员，Node.js 将安装到用户目录：$targetRoot" }
   $targetDir = Join-Path $targetRoot "node-$version-win-$arch"
   Say "准备安装 Node.js $version 到：$targetDir"
   Invoke-WebDownload $zipUrl $zipFile
@@ -341,8 +492,13 @@ function Install-NodeFromOfficialZip {
   New-Item -ItemType Directory -Force -Path $targetRoot | Out-Null
   Say "解压 Node.js..."
   Expand-Archive -Path $zipFile -DestinationPath $targetRoot -Force
-  Add-UserPath $targetDir
-  Ok "Node.js 已安装到用户目录：$targetDir"
+  if (Test-IsAdministrator) {
+    Add-MachinePath $targetDir
+    Ok "Node.js 已安装到系统目录：$targetDir"
+  } else {
+    Add-UserPath $targetDir
+    Ok "Node.js 已安装到用户目录：$targetDir"
+  }
 }
 
 function Use-NvmInstalledNode {
@@ -409,8 +565,14 @@ function Install-PythonFromOfficialInstaller {
   $installer = Join-Path $env:TEMP ([IO.Path]::GetFileName($installerUrl))
   Say "准备下载 Python 官方安装器：$installerUrl"
   Invoke-WebDownload $installerUrl $installer
-  Say "执行：Python 用户静默安装（包含 pip，并写入用户 PATH）"
-  $process = Start-Process -FilePath $installer -ArgumentList "/quiet InstallAllUsers=0 PrependPath=1 Include_pip=1 Include_launcher=1 SimpleInstall=1" -Wait -PassThru
+  if (Test-IsAdministrator) {
+    Say "执行：Python 系统静默安装（包含 pip，并写入系统 PATH）"
+    $args = "/quiet InstallAllUsers=1 PrependPath=1 Include_pip=1 Include_launcher=1 SimpleInstall=1"
+  } else {
+    Say "执行：Python 用户静默安装（包含 pip，并写入用户 PATH）"
+    $args = "/quiet InstallAllUsers=0 PrependPath=1 Include_pip=1 Include_launcher=1 SimpleInstall=1"
+  }
+  $process = Start-Process -FilePath $installer -ArgumentList $args -Wait -PassThru
   if ($process.ExitCode -ne 0) { throw "Python 安装失败，退出码：$($process.ExitCode)" }
   Register-PythonPaths
   Refresh-ProcessPath
@@ -418,6 +580,10 @@ function Install-PythonFromOfficialInstaller {
 
 function Register-PythonPaths {
   $candidateRoots = @(
+    "$env:ProgramFiles\Python",
+    "$env:ProgramFiles\Python313",
+    "$env:ProgramFiles\Python312",
+    "$env:ProgramFiles\Python311",
     "$env:LOCALAPPDATA\Programs\Python",
     "$env:APPDATA\Python"
   ) | Where-Object { $_ -and (Test-Path $_) }
@@ -441,7 +607,8 @@ function Ensure-Ffmpeg {
 function Install-FfmpegFromOfficialZip {
   $zipUrl = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
   $zipFile = Join-Path $env:TEMP "ffmpeg-release-essentials.zip"
-  $targetRoot = Join-Path $env:LOCALAPPDATA "Programs\ffmpeg"
+  $targetRoot = Get-InstallRoot "ffmpeg"
+  if (-not (Test-IsAdministrator)) { Warn "当前不是管理员，ffmpeg 将安装到用户目录：$targetRoot" }
   Say "准备下载 ffmpeg 官方构建：$zipUrl"
   Invoke-WebDownload $zipUrl $zipFile
   Remove-Item $targetRoot -Recurse -Force -ErrorAction SilentlyContinue
@@ -451,8 +618,13 @@ function Install-FfmpegFromOfficialZip {
   $ffmpegExe = Get-ChildItem -Path $targetRoot -Filter "ffmpeg.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
   if (-not $ffmpegExe) { throw "ffmpeg 解压后未找到 ffmpeg.exe" }
   $binDir = $ffmpegExe.Directory.FullName
-  Add-UserPath $binDir
-  Ok "ffmpeg 已安装到用户目录：$binDir"
+  if (Test-IsAdministrator) {
+    Add-MachinePath $binDir
+    Ok "ffmpeg 已安装到系统目录：$binDir"
+  } else {
+    Add-UserPath $binDir
+    Ok "ffmpeg 已安装到用户目录：$binDir"
+  }
 }
 
 function Install-Hermes {
@@ -464,6 +636,7 @@ function Install-Hermes {
   try {
     Invoke-WebDownload "https://hermes-agent.nousresearch.com/install.ps1" $script
     powershell -ExecutionPolicy Bypass -File $script
+    Register-ToolPaths
   } catch {
     Fail "Hermes 安装脚本下载或执行失败：$($_.Exception.Message)"
   }
@@ -479,6 +652,7 @@ function Install-CodexCli {
     $script = Join-Path $env:TEMP "codex-install.ps1"
     Invoke-WebDownload "https://chatgpt.com/codex/install.ps1" $script
     powershell -ExecutionPolicy Bypass -File $script
+    Register-ToolPaths
   } catch {
     Fail "Codex CLI 安装失败：$($_.Exception.Message)"
   }
@@ -551,18 +725,57 @@ function Install-LarkCli {
     npm config set proxy $ProxyUrl | Out-Null
     npm config set https-proxy $ProxyUrl | Out-Null
   }
+  Register-NpmGlobalPath
   npm install -g @larksuite/cli
   Register-NpmGlobalPath
   try { lark-cli update | Out-Null } catch {}
 }
 
 function Register-NpmGlobalPath {
+  $globalPrefix = if (Test-IsAdministrator) {
+    Join-Path $env:ProgramFiles "npm-global"
+  } else {
+    Join-Path $env:APPDATA "npm"
+  }
+  New-Item -ItemType Directory -Force -Path $globalPrefix | Out-Null
+  npm config set prefix $globalPrefix | Out-Null
+  if (Test-IsAdministrator) {
+    Add-MachinePath $globalPrefix
+  } else {
+    Add-UserPath $globalPrefix
+  }
   try {
     $npmPrefix = (npm config get prefix 2>$null).Trim()
-    if ($npmPrefix -and (Test-Path $npmPrefix)) { Add-UserPath $npmPrefix }
+    if ($npmPrefix -and (Test-Path $npmPrefix)) {
+      if (Test-IsAdministrator -and $npmPrefix.StartsWith($env:ProgramFiles, [StringComparison]::OrdinalIgnoreCase)) {
+        Add-MachinePath $npmPrefix
+      } else {
+        Add-UserPath $npmPrefix
+      }
+    }
   } catch {}
   $npmRoaming = Join-Path $env:APPDATA "npm"
   if (Test-Path $npmRoaming) { Add-UserPath $npmRoaming }
+}
+
+function Register-ToolPaths {
+  $candidates = @(
+    "$env:ProgramFiles\Hermes\bin",
+    "$env:ProgramFiles\hermes\bin",
+    "$env:LOCALAPPDATA\Programs\Hermes\bin",
+    "$env:LOCALAPPDATA\Programs\hermes\bin",
+    "$env:USERPROFILE\.hermes\bin",
+    "$env:USERPROFILE\.local\bin",
+    "$env:ProgramFiles\Codex\bin",
+    "$env:LOCALAPPDATA\Programs\Codex\bin"
+  ) | Where-Object { $_ -and (Test-Path $_) }
+  foreach ($dir in $candidates) {
+    if (Test-IsAdministrator -and $dir.StartsWith($env:ProgramFiles, [StringComparison]::OrdinalIgnoreCase)) {
+      Add-MachinePath $dir
+    } else {
+      Add-UserPath $dir
+    }
+  }
 }
 
 function Install-Python {
@@ -588,6 +801,7 @@ function Install-Whisper {
   }
   $pythonUserBase = (python -m site --user-base 2>$null)
   if ($pythonUserBase) { Add-UserPath (Join-Path $pythonUserBase "Scripts") }
+  Register-PythonPaths
   Refresh-ProcessPath
   $model = Choose-WhisperModel
   Download-WhisperModel $model
@@ -610,6 +824,7 @@ function Check-All {
 }
 
 Show-Intro
+Suggest-Elevation
 Write-Host "------------------------------------------------------------"
 Write-Host "Agent 航海环境部署工具 (Windows)"
 Write-Host "------------------------------------------------------------"

@@ -44,11 +44,13 @@ $env:GITHUB_ACCELERATORS_EXTRA = "https://your-proxy.example/"
 powershell -ExecutionPolicy Bypass -File .\install.ps1
 ```
 
-终端支持彩色启动动画。涉及下载时会优先显示系统自带下载进度条或安装器输出，避免长时间看起来没有进展；如果要关闭颜色动效，可以设置 `NO_COLOR=1`。
+终端支持彩色启动动画。涉及下载时会显示下载地址和进度；Windows 使用自定义单行下载进度，避免 PowerShell 默认进度条占用大块屏幕区域。如果要关闭颜色动效，可以设置 `NO_COLOR=1`。
 
 交互确认不会自动安装：按回车继续，输入 `s` 跳过当前步骤，输入 `q` 退出并保留终端窗口。如果某个环境已经安装但脚本没有检测到，建议输入 `s` 跳过。
 
-Windows 安装 Node.js、Python、ffmpeg、npm 全局命令和 Python Scripts 后，会写入当前用户 PATH，并立即刷新当前脚本进程的环境变量；新开的 PowerShell 也会继承这些路径。
+Windows 会按权限选择安装位置：管理员 PowerShell 优先安装到 `C:\Program Files` 并写入系统 PATH；非管理员回退到 `%LOCALAPPDATA%\Programs` / 用户目录并写入用户 PATH。Node.js、Python、ffmpeg、npm 全局命令、Python Scripts、Hermes/Codex 常见命令目录都会刷新到当前脚本进程；新开的 PowerShell 也会继承这些路径。
+
+Windows 如果不是管理员 PowerShell，脚本会提醒是否弹出 UAC 并以管理员身份重新运行。选择同意后会优先安装到 `C:\Program Files`；选择否，则继续使用用户目录安装。
 
 macOS 也会维护 PATH：安装模式会写入 Homebrew、`~/.local/bin`、Hermes、npm 全局命令、Python user bin 等常见目录到 `.zshrc`、`.zprofile`、`.bash_profile`、`.bashrc`，并立即刷新当前脚本进程。nvm 会写入初始化脚本，不会把某个固定 Node 版本目录写死到 PATH；`--check` 检测模式不会修改配置文件。
 
@@ -130,7 +132,7 @@ Windows:
 - Hermes Agent：官方安装脚本 `https://hermes-agent.nousresearch.com/install.sh` / `install.ps1`
 - Codex CLI：官方安装脚本 `https://chatgpt.com/codex/install.sh` / `install.ps1`
 - ChatGPT / Codex Desktop：macOS 检查 `/Applications/ChatGPT.app` 和 `/Applications/Codex.app`；Windows 检查 Appx 包、WindowsApps 下的 `OpenAI.Codex_*\\app\\ChatGPT.exe`、常见本地安装目录
-- Node.js：macOS 会先加载已有 nvm，再优先 Homebrew，否则使用 nvm；Windows 会先加载常见 nvm-windows 路径，否则下载官方 Node.js LTS zip 到用户目录
+- Node.js：macOS 会先加载已有 nvm，再优先 Homebrew，否则使用 nvm；Windows 会先加载常见 nvm-windows 路径，否则下载官方 Node.js LTS zip；管理员 PowerShell 安装到 `C:\Program Files\nodejs` 并写入系统 PATH，非管理员回退到用户目录并写入用户 PATH
 - 飞书 CLI：npm 包 `@larksuite/cli`
 - Python 3：macOS 优先 Homebrew；Windows 下载 python.org 官方安装器并执行用户静默安装
 - ffmpeg：macOS 使用 Homebrew；Windows 下载 gyan.dev 官方 zip 并解压到用户目录
