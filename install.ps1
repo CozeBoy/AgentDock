@@ -194,23 +194,22 @@ function Download-WhisperModel([string]$Model) {
     return
   }
   Step "预下载 Whisper 模型：$Model"
+  Say "首次加载会下载模型文件，Whisper 会显示缓存和下载进度。"
   python -c "import whisper; whisper.load_model('$Model'); print('Whisper model ready: $Model')"
 }
 
 function Invoke-WebDownload([string]$Url, [string]$OutFile) {
-  $proxyForJob = $ProxyUrl
-  $status = Invoke-WithSpinner "下载资源" {
-    $params = @{
-      Uri = $using:Url
-      OutFile = $using:OutFile
-      UseBasicParsing = $true
-      TimeoutSec = 60
-      ErrorAction = "Stop"
-    }
-    if ($using:proxyForJob) { $params["Proxy"] = $using:proxyForJob }
-    Invoke-WebRequest @params
+  Say "下载地址：$Url"
+  $params = @{
+    Uri = $Url
+    OutFile = $OutFile
+    UseBasicParsing = $true
+    TimeoutSec = 60
+    ErrorAction = "Stop"
   }
-  if ($status -ne 0 -or -not (Test-Path $OutFile)) {
+  if ($ProxyUrl) { $params["Proxy"] = $ProxyUrl }
+  Invoke-WebRequest @params
+  if (-not (Test-Path $OutFile)) {
     throw "下载失败：$Url"
   }
 }
@@ -292,6 +291,7 @@ function Ensure-Node {
     }
   }
   if (-not ((HasCommand "node") -and (HasCommand "npm")) -and (Ensure-Winget)) {
+    Say "执行：winget install --id OpenJS.NodeJS.LTS"
     winget install --id OpenJS.NodeJS.LTS -e --accept-package-agreements --accept-source-agreements
     $env:Path = [Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [Environment]::GetEnvironmentVariable("Path", "User")
   }
@@ -340,6 +340,7 @@ function Ensure-Python {
   if ($Check) { Warn "Python 未安装"; return $false }
   if (-not (Confirm-Step "安装 Python 3.11（Whisper 需要）")) { return $false }
   if (Ensure-Winget) {
+    Say "执行：winget install --id Python.Python.3.11"
     winget install --id Python.Python.3.11 -e --accept-package-agreements --accept-source-agreements
     $env:Path = [Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [Environment]::GetEnvironmentVariable("Path", "User")
   }
@@ -351,6 +352,7 @@ function Ensure-Ffmpeg {
   if ($Check) { Warn "ffmpeg 未安装"; return $false }
   if (-not (Confirm-Step "安装 ffmpeg（Whisper 处理音频需要）")) { return $false }
   if (Ensure-Winget) {
+    Say "执行：winget install --id Gyan.FFmpeg"
     winget install --id Gyan.FFmpeg -e --accept-package-agreements --accept-source-agreements
     $env:Path = [Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [Environment]::GetEnvironmentVariable("Path", "User")
   }
@@ -473,7 +475,9 @@ function Install-Whisper {
   if (-not (HasCommand "python")) { Fail "Python 不可用，无法安装 Whisper"; return }
   if (-not $whisperInstalled) {
     if (-not (Confirm-Step "安装 Whisper（openai-whisper Python 包）")) { return }
+    Say "执行：python -m pip install --user --upgrade pip"
     python -m pip install --user --upgrade pip
+    Say "执行：python -m pip install --user --upgrade openai-whisper"
     python -m pip install --user --upgrade openai-whisper
   }
   $pythonUserBase = (python -m site --user-base 2>$null)

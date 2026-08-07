@@ -112,10 +112,11 @@ apply_proxy_env(){
 
 curl_download(){
   local url="$1" out="$2"
+  say "${DIM}下载地址：$url${RST}"
   if [ -n "$PROXY_URL" ]; then
-    run_with_spinner "下载资源" curl -fsSL --connect-timeout 12 --retry 2 --proxy "$PROXY_URL" "$url" -o "$out"
+    curl -fL --connect-timeout 12 --retry 2 --progress-bar --proxy "$PROXY_URL" "$url" -o "$out"
   else
-    run_with_spinner "下载资源" curl -fsSL --connect-timeout 12 --retry 2 "$url" -o "$out"
+    curl -fL --connect-timeout 12 --retry 2 --progress-bar "$url" -o "$out"
   fi
 }
 
@@ -307,6 +308,7 @@ download_whisper_model(){
     *) warn "未知 Whisper 模型：$model，跳过预下载"; return ;;
   esac
   step "预下载 Whisper 模型：$model"
+  say "${DIM}首次加载会下载模型文件，Whisper 会显示缓存和下载进度。${RST}"
   python3 - <<PY
 import whisper
 whisper.load_model("$model")
@@ -372,9 +374,11 @@ ensure_node(){
   fi
   confirm "安装 Node.js（飞书 CLI 需要 npm）" || return 1
   if has_cmd nvm; then
+    say "${DIM}执行：nvm install --lts${RST}"
     nvm install --lts
     nvm use --lts
   elif has_cmd brew; then
+    say "${DIM}执行：brew install node${RST}"
     brew install node
   else
     warn "未检测到 Homebrew，将通过 nvm 安装 Node.js"
@@ -383,6 +387,7 @@ ensure_node(){
       PROFILE="$HOME/.zshrc" bash "$tmp_script"
       export NVM_DIR="$HOME/.nvm"
       [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+      say "${DIM}执行：nvm install --lts${RST}"
       nvm install --lts
       nvm use --lts
     fi
@@ -440,6 +445,7 @@ ensure_python(){
   fi
   confirm "安装 Python 3（Whisper 需要）" || return 1
   if has_cmd brew; then
+    say "${DIM}执行：brew install python${RST}"
     brew install python
   else
     warn "未检测到 Homebrew，无法自动安装 Python；请稍后手动安装或先安装 Homebrew"
@@ -452,6 +458,7 @@ ensure_ffmpeg(){
   [ "$CHECK_ONLY" = "1" ] && { warn "ffmpeg 未安装"; return 1; }
   confirm "安装 ffmpeg（Whisper 处理音频需要）" || return 1
   if has_cmd brew; then
+    say "${DIM}执行：brew install ffmpeg${RST}"
     brew install ffmpeg
   else
     warn "未检测到 Homebrew，无法自动安装 ffmpeg；请稍后手动安装或先安装 Homebrew"
@@ -559,7 +566,9 @@ install_whisper(){
   ensure_ffmpeg
   if [ "$whisper_installed" = "0" ]; then
     confirm "安装 Whisper（openai-whisper Python 包）" || return
+    say "${DIM}执行：python3 -m pip install --user --upgrade pip${RST}"
     python3 -m pip install --user --upgrade pip
+    say "${DIM}执行：python3 -m pip install --user --upgrade openai-whisper${RST}"
     python3 -m pip install --user --upgrade openai-whisper
   fi
   local python_user_bin
