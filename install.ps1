@@ -1566,10 +1566,14 @@ function Install-Whisper {
 
 function Check-All {
   Step "环境检测"
-  Load-NvmIfPresent | Out-Null
   Say "系统：Windows $([Environment]::OSVersion.Version)"
-  if (HasCommand "nvm") { Ok "nvm：已检测到" } else { Warn "nvm：未检测到" }
-  if (HasCommand "node") { Ok "Node.js：$(node -v)" } else { Warn "Node.js：未安装" }
+  if (HasCommand "node") {
+    Ok "Node.js：$(node -v)"
+  } else {
+    Load-NvmIfPresent | Out-Null
+    if (HasCommand "nvm") { Ok "nvm：已检测到" } else { Warn "nvm：未检测到" }
+    if (HasCommand "node") { Ok "Node.js：$(node -v)" } else { Warn "Node.js：未安装" }
+  }
   $python3 = Get-Python3Command
   if ($python3) { Ok "Python 3：$(Get-PythonCommandDisplay $python3)" } else { Warn "Python 3：未安装" }
   if (HasCommand "ffmpeg") { Ok "ffmpeg：已安装" } else { Warn "ffmpeg：未安装" }

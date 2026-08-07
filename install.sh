@@ -1134,12 +1134,16 @@ install_whisper(){
 
 check_all(){
   step "环境检测"
-  load_nvm_if_present
   say "系统：$(sw_vers -productVersion 2>/dev/null) / $(uname -m)"
   has_cmd brew && ok "Homebrew：$(brew --version 2>/dev/null | head -1)" || warn "Homebrew：未安装"
   xcode-select -p >/dev/null 2>&1 && ok "Xcode Command Line Tools：已安装" || warn "Xcode Command Line Tools：未安装"
-  has_cmd nvm && ok "nvm：已检测到" || warn "nvm：未检测到"
-  has_cmd node && ok "Node.js：$(node -v 2>/dev/null)" || warn "Node.js：未安装"
+  if has_cmd node; then
+    ok "Node.js：$(node -v 2>/dev/null)"
+  else
+    load_nvm_if_present
+    has_cmd nvm && ok "nvm：已检测到" || warn "nvm：未检测到"
+    has_cmd node && ok "Node.js：$(node -v 2>/dev/null)" || warn "Node.js：未安装"
+  fi
   python3_cmd >/dev/null 2>&1 && ok "Python 3：$($(python3_cmd) --version 2>/dev/null)" || warn "Python 3：未安装"
   has_cmd hermes && ok "Hermes：$(hermes --version 2>/dev/null | head -1)" || warn "Hermes：未安装"
   has_cmd codex && ok "Codex CLI：$(codex --version 2>/dev/null | head -1)" || warn "Codex CLI：未安装"
