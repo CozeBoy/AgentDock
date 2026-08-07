@@ -68,7 +68,8 @@ macOS 也会维护 PATH：安装模式会写入 Homebrew、`~/.local/bin`、Herm
 2. 通用运行环境：nvm / Node.js、Python 3
 3. 媒体 / Hermes 依赖：ffmpeg、yt-dlp、ripgrep（Windows）
 4. Agent 工具：Hermes Agent、Codex CLI、ChatGPT / Codex Desktop、飞书 CLI
-5. Whisper
+5. Hermes 配置：接口模型、飞书 / Lark 通道
+6. Whisper
 
 ## macOS
 
@@ -167,11 +168,14 @@ Windows:
 
 再次运行脚本时，如果 Whisper 已安装，脚本会先检测并展示本机已缓存的模型，然后仍然进入模型选择；可以选择新的模型继续预下载，也可以选择 `skip` 跳过。
 
+Whisper 模型下载如果中断或校验失败，脚本会自动删除当前模型的损坏缓存并重试，最多重试 3 次；不会删除其他已缓存模型。
+
 ## 安装来源
 
 - Xcode Command Line Tools：macOS 系统自带 `xcode-select --install`
 - Homebrew：官方安装脚本 `https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh`
 - Hermes Agent：官方安装脚本 `https://hermes-agent.nousresearch.com/install.sh` / `install.ps1`
+- Hermes 配置：安装完成后会可选运行 `hermes model` 设置接口模型，并可选运行 `hermes gateway setup` 配置消息通道；飞书通道在 Hermes 当前版本支持时可在 gateway setup 中选择 Feishu / Lark。自动模式会跳过这些交互配置，可稍后手动执行这两个命令
 - Codex CLI：官方安装脚本 `https://chatgpt.com/codex/install.sh` / `install.ps1`
 - ChatGPT / Codex Desktop：macOS 检查 `/Applications/ChatGPT.app` 和 `/Applications/Codex.app`；Windows 检查 Appx 包、WindowsApps 下的 `OpenAI.Codex_*\\app\\ChatGPT.exe`、常见本地安装目录
 - Node.js：macOS 会先加载已有 nvm，再优先 Homebrew，否则使用 nvm；Windows 会先加载常见 nvm-windows 路径，否则下载官方 Node.js LTS zip；管理员 PowerShell 安装到 `C:\Program Files\nodejs` 并写入系统 PATH，非管理员回退到用户目录并写入用户 PATH

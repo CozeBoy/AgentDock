@@ -112,6 +112,23 @@ function Invoke-LarkCli([string[]]$Arguments) {
   if (-not $lark) { throw "lark-cli 不可用" }
   & $lark @Arguments
 }
+function Get-HermesCommand {
+  $cmd = Get-Command "hermes.cmd" -ErrorAction SilentlyContinue
+  if ($cmd) { return $cmd.Source }
+  $cmd = Get-Command "hermes.exe" -ErrorAction SilentlyContinue
+  if ($cmd) { return $cmd.Source }
+  $cmd = Get-Command "hermes" -CommandType Application -ErrorAction SilentlyContinue
+  if ($cmd) { return $cmd.Source }
+  $cmd = Get-Command "hermes" -ErrorAction SilentlyContinue
+  if ($cmd) { return $cmd.Source }
+  return $null
+}
+function HasHermes { return [bool](Get-HermesCommand) }
+function Invoke-Hermes([string[]]$Arguments) {
+  $hermes = Get-HermesCommand
+  if (-not $hermes) { throw "hermes 不可用" }
+  & $hermes @Arguments
+}
 function EffectsEnabled { return (-not $env:NO_COLOR) }
 
 function Enable-AnsiConsole {
@@ -774,6 +791,23 @@ function Show-WhisperCachedModels {
   foreach ($model in $models) { Say "  - $model" }
 }
 
+function Clear-WhisperModelCache([string]$Model) {
+  $cacheRoots = @(
+    $env:WHISPER_CACHE,
+    (Join-Path $env:USERPROFILE ".cache\whisper")
+  ) | Where-Object { $_ -and (Test-Path $_) }
+  foreach ($root in ($cacheRoots | Select-Object -Unique)) {
+    try {
+      Get-ChildItem -Path $root -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -match "^$([regex]::Escape($Model))(\..*)?\.pt$" } |
+        ForEach-Object {
+          Warn "删除损坏或未完成的模型缓存：$($_.FullName)"
+          Remove-Item $_.FullName -Force -ErrorAction SilentlyContinue
+        }
+    } catch {}
+  }
+}
+
 function Choose-WhisperModel {
   if ($WhisperModel) { return Normalize-WhisperModel $WhisperModel }
   if ($Yes) { return "turbo" }
@@ -814,7 +848,20 @@ function Download-WhisperModel([string]$Model) {
   Say "首次加载会下载模型文件，Whisper 会显示缓存和下载进度。"
   $mainPython = Get-MainPythonCommand
   if (-not $mainPython) { Fail "未检测到可用 Python，无法预下载 Whisper 模型"; return }
-  Invoke-PythonCommand $mainPython @("-c", "import whisper; whisper.load_model('$Model'); print('Whisper model ready: $Model')")
+  for ($attempt = 1; $attempt -le 3; $attempt++) {
+    Say "Whisper 模型下载尝试 $attempt/3：$Model"
+    Invoke-PythonCommand $mainPython @("-c", "import whisper; whisper.load_model('$Model'); print('Whisper model ready: $Model')")
+    if ($LASTEXITCODE -eq 0) {
+      Ok "Whisper 模型已就绪：$Model"
+      return
+    }
+    Warn "Whisper 模型下载或校验失败：$Model"
+    if ($attempt -lt 3) {
+      Clear-WhisperModelCache $Model
+      Warn "准备重试下载 Whisper 模型：$Model"
+    }
+  }
+  Fail "Whisper 模型下载失败，已重试 3 次：$Model"
 }
 
 function Format-ByteSize([double]$Bytes) {
@@ -1339,7 +1386,7 @@ function Install-YtDlpFromGithubExe {
 
 function Install-Hermes {
   Step "Hermes Agent"
-  if (HasCommand "hermes") { Ok "Hermes 已安装：$(hermes --version | Select-Object -First 1)"; return }
+  if (HasHermes) { Ok "Hermes 已安装：$(Invoke-Hermes @("--version") | Select-Object -First 1)"; return }
   if ($Check) { Warn "Hermes 未安装"; return }
   $missing = Get-HermesMissingPrereqs
   if ($missing.Count -gt 0) {
@@ -1371,6 +1418,28 @@ function Install-Hermes {
     }
   } catch {
     Fail "Hermes 安装脚本下载或执行失败：$($_.Exception.Message)"
+  }
+}
+
+function Configure-HermesAgent {
+  Step "Hermes Agent 配置"
+  if (-not (HasHermes)) {
+    Warn "Hermes 未安装，跳过配置"
+    return
+  }
+  if ($Check) { return }
+  if ($Yes) {
+    Warn "自动模式下跳过 Hermes 交互配置；可稍后手动运行 hermes model 和 hermes gateway setup"
+    return
+  }
+  Say "可在这里配置 Hermes 的接口模型和消息通道。"
+  Say "接口模型：运行 hermes model，选择 provider / model。"
+  Say "飞书通道：运行 hermes gateway setup，在消息平台里选择 Feishu / Lark（如果当前 Hermes 版本支持）。"
+  if (Confirm-Step "配置 Hermes 接口模型") {
+    try { Invoke-Hermes @("model") } catch { Warn "Hermes 接口模型配置失败：$($_.Exception.Message)" }
+  }
+  if (Confirm-Step "配置 Hermes 飞书 / Lark 通道") {
+    try { Invoke-Hermes @("gateway", "setup") } catch { Warn "Hermes 通道配置失败：$($_.Exception.Message)" }
   }
 }
 
@@ -1579,7 +1648,7 @@ function Check-All {
   if (HasCommand "ffmpeg") { Ok "ffmpeg：已安装" } else { Warn "ffmpeg：未安装" }
   if (HasGlobalTool "yt-dlp") { Ok "yt-dlp：$(yt-dlp --version | Select-Object -First 1)" } else { Warn "yt-dlp：未安装全局入口" }
   if (HasCommand "rg") { Ok "ripgrep：$(rg --version | Select-Object -First 1)" } else { Warn "ripgrep：未安装" }
-  if (HasCommand "hermes") { Ok "Hermes：$(hermes --version | Select-Object -First 1)" } else { Warn "Hermes：未安装" }
+  if (HasHermes) { Ok "Hermes：$(Invoke-Hermes @("--version") | Select-Object -First 1)" } else { Warn "Hermes：未安装" }
   if (HasCommand "codex") { Ok "Codex CLI：$(codex --version | Select-Object -First 1)" } else { Warn "Codex CLI：未安装" }
   $desktop = Get-CodexDesktopInstall
   if ($desktop) { Ok "ChatGPT / Codex Desktop：$desktop" } else { Warn "ChatGPT / Codex Desktop：未检测到" }
@@ -1608,6 +1677,7 @@ Install-Hermes
 Install-CodexCli
 Install-CodexDesktop
 Install-LarkCli
+Configure-HermesAgent
 Install-Whisper
 Check-All
 Write-Host "------------------------------------------------------------"

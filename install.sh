@@ -568,6 +568,27 @@ EOF
   [ "$found" = "1" ] || warn "未检测到已缓存的 Whisper 模型"
 }
 
+clear_whisper_model_cache(){
+  local model="$1" roots root file
+  roots="
+${WHISPER_CACHE:-}
+${XDG_CACHE_HOME:-$HOME/.cache}/whisper
+$HOME/.cache/whisper
+"
+  while IFS= read -r root; do
+    [ -n "$root" ] && [ -d "$root" ] || continue
+    while IFS= read -r file; do
+      [ -n "$file" ] || continue
+      warn "删除损坏或未完成的模型缓存：$file"
+      rm -f "$file" 2>/dev/null
+    done <<EOF
+$(find "$root" -maxdepth 1 -type f -name "${model}*.pt" 2>/dev/null || true)
+EOF
+  done <<EOF
+$roots
+EOF
+}
+
 choose_whisper_model(){
   if [ -n "$WHISPER_MODEL_INPUT" ]; then
     WHISPER_MODEL="$(normalize_whisper_model "$WHISPER_MODEL_INPUT")"
@@ -614,14 +635,27 @@ download_whisper_model(){
   esac
   step "预下载 Whisper 模型：$model"
   say "${DIM}首次加载会下载模型文件，Whisper 会显示缓存和下载进度。${RST}"
-  local py
+  local py attempt
   py="$(main_python_cmd)"
   [ -n "$py" ] || { warn "Python 3 不可用，跳过 Whisper 模型预下载"; return; }
-  "$py" - <<PY
+  for attempt in 1 2 3; do
+    say "${DIM}Whisper 模型下载尝试 $attempt/3：$model${RST}"
+    "$py" - <<PY
 import whisper
 whisper.load_model("$model")
 print("Whisper model ready: $model")
 PY
+    if [ "$?" = "0" ]; then
+      ok "Whisper 模型已就绪：$model"
+      return
+    fi
+    warn "Whisper 模型下载或校验失败：$model"
+    if [ "$attempt" != "3" ]; then
+      clear_whisper_model_cache "$model"
+      warn "准备重试下载 Whisper 模型：$model"
+    fi
+  done
+  err "Whisper 模型下载失败，已重试 3 次：$model"
 }
 
 add_path_once(){
@@ -1033,6 +1067,25 @@ install_hermes(){
   fi
 }
 
+configure_hermes_agent(){
+  step "Hermes Agent 配置"
+  has_cmd hermes || { warn "Hermes 未安装，跳过配置"; return; }
+  [ "$CHECK_ONLY" = "1" ] && return
+  if [ "$ASSUME_YES" = "1" ]; then
+    warn "自动模式下跳过 Hermes 交互配置；可稍后手动运行 hermes model 和 hermes gateway setup"
+    return
+  fi
+  say "可在这里配置 Hermes 的接口模型和消息通道。"
+  say "接口模型：运行 hermes model，选择 provider / model。"
+  say "飞书通道：运行 hermes gateway setup，在消息平台里选择 Feishu / Lark（如果当前 Hermes 版本支持）。"
+  if confirm "配置 Hermes 接口模型"; then
+    hermes model
+  fi
+  if confirm "配置 Hermes 飞书 / Lark 通道"; then
+    hermes gateway setup
+  fi
+}
+
 install_codex_cli(){
   step "Codex CLI"
   has_cmd codex && { ok "Codex CLI 已安装：$(codex --version 2>/dev/null | head -1)"; return; }
@@ -1176,6 +1229,7 @@ main(){
   install_codex_cli
   install_codex_desktop
   install_lark_cli
+  configure_hermes_agent
   install_whisper
   check_all
   hr
