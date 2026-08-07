@@ -411,18 +411,30 @@ install_codex_cli(){
 }
 
 install_codex_desktop(){
-  step "Codex Desktop"
-  if [ -d "/Applications/Codex.app" ] || [ -d "/Applications/ChatGPT.app" ]; then
-    ok "检测到 Codex / ChatGPT Desktop 应用"
+  step "ChatGPT / Codex Desktop"
+  if detect_codex_desktop >/dev/null 2>&1; then
+    ok "检测到 $(detect_codex_desktop)"
     return
   fi
-  [ "$CHECK_ONLY" = "1" ] && { warn "未检测到 Codex / ChatGPT Desktop 应用"; return; }
-  confirm "打开 Codex Desktop 官方安装入口" || return
+  [ "$CHECK_ONLY" = "1" ] && { warn "未检测到 ChatGPT / Codex Desktop 应用"; return; }
+  confirm "打开 ChatGPT / Codex Desktop 官方安装入口" || return
   if has_cmd codex; then
     codex app >/dev/null 2>&1
   fi
   open "https://chatgpt.com/codex" >/dev/null 2>&1
   warn "桌面 App 需要在打开的官方页面中完成下载和登录"
+}
+
+detect_codex_desktop(){
+  if [ -d "/Applications/ChatGPT.app" ]; then
+    printf '%s\n' "ChatGPT.app：/Applications/ChatGPT.app"
+    return 0
+  fi
+  if [ -d "/Applications/Codex.app" ]; then
+    printf '%s\n' "Codex.app：/Applications/Codex.app"
+    return 0
+  fi
+  return 1
 }
 
 install_xcode_tools(){
@@ -493,7 +505,7 @@ check_all(){
   say "系统：$(sw_vers -productVersion 2>/dev/null) / $(uname -m)"
   has_cmd hermes && ok "Hermes：$(hermes --version 2>/dev/null | head -1)" || warn "Hermes：未安装"
   has_cmd codex && ok "Codex CLI：$(codex --version 2>/dev/null | head -1)" || warn "Codex CLI：未安装"
-  [ -d "/Applications/Codex.app" ] || [ -d "/Applications/ChatGPT.app" ] && ok "Codex Desktop：已检测到桌面应用" || warn "Codex Desktop：未检测到"
+  detect_codex_desktop >/dev/null 2>&1 && ok "ChatGPT / Codex Desktop：$(detect_codex_desktop)" || warn "ChatGPT / Codex Desktop：未检测到"
   has_cmd lark-cli && ok "lark-cli：$(lark-cli --version 2>/dev/null | head -1)" || warn "lark-cli：未安装"
   has_cmd whisper || python3 -m whisper --help >/dev/null 2>&1 && ok "Whisper：已安装" || warn "Whisper：未安装"
   has_cmd python3 && ok "Python：$(python3 --version 2>/dev/null)" || warn "Python：未安装"

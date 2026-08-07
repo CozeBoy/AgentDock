@@ -5,7 +5,7 @@
 - Xcode Command Line Tools（macOS）
 - Homebrew（macOS）
 - Hermes Agent
-- Codex Desktop / ChatGPT Desktop 中的 Codex 入口
+- ChatGPT Desktop / Codex Desktop 中的 Codex 入口
 - Codex CLI
 - Node.js
 - 飞书 / Lark CLI
@@ -48,7 +48,7 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1
 
 1. macOS 基础依赖：Xcode Command Line Tools、Homebrew
 2. 通用运行环境：nvm / Node.js、Python
-3. Agent 工具：Hermes Agent、Codex CLI、Codex Desktop、飞书 CLI
+3. Agent 工具：Hermes Agent、Codex CLI、ChatGPT / Codex Desktop、飞书 CLI
 4. Whisper 依赖与工具：ffmpeg、Whisper
 
 ## macOS
@@ -121,7 +121,7 @@ Windows:
 - Homebrew：官方安装脚本 `https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh`
 - Hermes Agent：官方安装脚本 `https://hermes-agent.nousresearch.com/install.sh` / `install.ps1`
 - Codex CLI：官方安装脚本 `https://chatgpt.com/codex/install.sh` / `install.ps1`
-- Codex Desktop：安装 Codex CLI 后运行 `codex app`，若失败则打开官方 Codex 页面
+- ChatGPT / Codex Desktop：macOS 检查 `/Applications/ChatGPT.app` 和 `/Applications/Codex.app`；Windows 检查 Appx 包、WindowsApps 下的 `OpenAI.Codex_*\\app\\ChatGPT.exe`、常见本地安装目录
 - Node.js：macOS 会先加载已有 nvm，再优先 Homebrew，否则使用 nvm；Windows 会先加载常见 nvm-windows 路径，否则使用 winget 安装 LTS 版
 - 飞书 CLI：npm 包 `@larksuite/cli`
 - Python 3：macOS 优先 Homebrew；Windows 使用 winget

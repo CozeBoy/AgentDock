@@ -310,17 +310,55 @@ function Install-CodexCli {
 }
 
 function Install-CodexDesktop {
-  Step "Codex Desktop"
-  $chatgptApp = Get-AppxPackage -Name "*ChatGPT*" -ErrorAction SilentlyContinue
-  $codexApp = Get-AppxPackage -Name "*Codex*" -ErrorAction SilentlyContinue
-  if ($chatgptApp -or $codexApp) { Ok "检测到 Codex / ChatGPT Desktop 应用"; return }
-  if ($Check) { Warn "未检测到 Codex / ChatGPT Desktop 应用"; return }
-  if (-not (Confirm-Step "打开 Codex Desktop 官方安装入口")) { return }
+  Step "ChatGPT / Codex Desktop"
+  $desktop = Get-CodexDesktopInstall
+  if ($desktop) { Ok "检测到 $desktop"; return }
+  if ($Check) { Warn "未检测到 ChatGPT / Codex Desktop 应用"; return }
+  if (-not (Confirm-Step "打开 ChatGPT / Codex Desktop 官方安装入口")) { return }
   if (HasCommand "codex") {
     try { codex app | Out-Null } catch {}
   }
   Start-Process "https://chatgpt.com/codex"
   Warn "桌面 App 需要在打开的官方页面中完成下载和登录"
+}
+
+function Get-CodexDesktopInstall {
+  $packages = @()
+  $packages += Get-AppxPackage -Name "*ChatGPT*" -ErrorAction SilentlyContinue
+  $packages += Get-AppxPackage -Name "*Codex*" -ErrorAction SilentlyContinue
+  foreach ($package in ($packages | Where-Object { $_ })) {
+    if ($package.InstallLocation) {
+      $exe = Join-Path $package.InstallLocation "app\ChatGPT.exe"
+      if (Test-Path $exe) { return "ChatGPT.exe：$exe" }
+      $exe = Join-Path $package.InstallLocation "ChatGPT.exe"
+      if (Test-Path $exe) { return "ChatGPT.exe：$exe" }
+      return "$($package.Name)：$($package.InstallLocation)"
+    }
+  }
+
+  $windowsApps = Join-Path $env:ProgramFiles "WindowsApps"
+  if (Test-Path $windowsApps) {
+    $matches = Get-ChildItem -Path $windowsApps -Directory -ErrorAction SilentlyContinue |
+      Where-Object { $_.Name -like "OpenAI.Codex_*" -or $_.Name -like "*ChatGPT*" -or $_.Name -like "*Codex*" }
+    foreach ($match in $matches) {
+      $exe = Join-Path $match.FullName "app\ChatGPT.exe"
+      if (Test-Path $exe) { return "ChatGPT.exe：$exe" }
+      $exe = Join-Path $match.FullName "ChatGPT.exe"
+      if (Test-Path $exe) { return "ChatGPT.exe：$exe" }
+    }
+  }
+
+  $localApps = @(
+    "$env:LOCALAPPDATA\Programs\ChatGPT\ChatGPT.exe",
+    "$env:LOCALAPPDATA\Programs\Codex\Codex.exe",
+    "$env:ProgramFiles\ChatGPT\ChatGPT.exe",
+    "$env:ProgramFiles\Codex\Codex.exe"
+  )
+  foreach ($exe in $localApps) {
+    if (Test-Path $exe) { return "$([IO.Path]::GetFileName($exe))：$exe" }
+  }
+
+  return $null
 }
 
 function Install-Node {
@@ -373,7 +411,8 @@ function Check-All {
   Say "系统：Windows $([Environment]::OSVersion.Version)"
   if (HasCommand "hermes") { Ok "Hermes：$(hermes --version | Select-Object -First 1)" } else { Warn "Hermes：未安装" }
   if (HasCommand "codex") { Ok "Codex CLI：$(codex --version | Select-Object -First 1)" } else { Warn "Codex CLI：未安装" }
-  if (Get-AppxPackage -Name "*ChatGPT*" -ErrorAction SilentlyContinue) { Ok "Codex Desktop：检测到 ChatGPT/Codex 桌面应用" } else { Warn "Codex Desktop：未检测到" }
+  $desktop = Get-CodexDesktopInstall
+  if ($desktop) { Ok "ChatGPT / Codex Desktop：$desktop" } else { Warn "ChatGPT / Codex Desktop：未检测到" }
   if (HasCommand "lark-cli") { Ok "lark-cli：$(lark-cli --version | Select-Object -First 1)" } else { Warn "lark-cli：未安装" }
   if (HasCommand "whisper") { Ok "Whisper：已安装" } else { Warn "Whisper：未安装" }
   if (HasCommand "python") { Ok "Python：$(python --version)" } else { Warn "Python：未安装" }
