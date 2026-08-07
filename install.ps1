@@ -808,6 +808,36 @@ function Clear-WhisperModelCache([string]$Model) {
   }
 }
 
+function Get-WhisperModelCacheFiles([string]$Model) {
+  $cacheRoots = @(
+    $env:WHISPER_CACHE,
+    (Join-Path $env:USERPROFILE ".cache\whisper")
+  ) | Where-Object { $_ -and (Test-Path $_) }
+  $files = New-Object System.Collections.Generic.List[object]
+  foreach ($root in ($cacheRoots | Select-Object -Unique)) {
+    try {
+      Get-ChildItem -Path $root -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -match "^$([regex]::Escape($Model))(\..*)?\.pt$" } |
+        ForEach-Object { $files.Add($_) }
+    } catch {}
+  }
+  return $files
+}
+
+function Confirm-WhisperModelRedownload([string]$Model) {
+  if ($Yes) { return "use" }
+  $files = @(Get-WhisperModelCacheFiles $Model)
+  if ($files.Count -eq 0) { return "download" }
+  Warn "已存在 $Model 模型缓存："
+  foreach ($file in $files) { Say "  - $($file.FullName)（$(Format-ByteSize $file.Length)）" }
+  $answer = Read-Host "回车=使用现有缓存并校验；r=覆盖重新下载；s=跳过"
+  switch ($answer.ToLowerInvariant()) {
+    "r" { return "redownload" }
+    "s" { return "skip" }
+    default { return "use" }
+  }
+}
+
 function Choose-WhisperModel {
   if ($WhisperModel) { return Normalize-WhisperModel $WhisperModel }
   if ($Yes) { return "turbo" }
@@ -848,6 +878,9 @@ function Download-WhisperModel([string]$Model) {
   Say "首次加载会下载模型文件，Whisper 会显示缓存和下载进度。"
   $mainPython = Get-MainPythonCommand
   if (-not $mainPython) { Fail "未检测到可用 Python，无法预下载 Whisper 模型"; return }
+  $cacheChoice = Confirm-WhisperModelRedownload $Model
+  if ($cacheChoice -eq "skip") { Warn "已跳过 Whisper 模型：$Model"; return }
+  if ($cacheChoice -eq "redownload") { Clear-WhisperModelCache $Model }
   for ($attempt = 1; $attempt -le 3; $attempt++) {
     Say "Whisper 模型下载尝试 $attempt/3：$Model"
     Invoke-PythonCommand $mainPython @("-c", "import whisper; whisper.load_model('$Model'); print('Whisper model ready: $Model')")
@@ -1433,14 +1466,41 @@ function Configure-HermesAgent {
     return
   }
   Say "可在这里配置 Hermes 的接口模型和消息通道。"
-  Say "接口模型：运行 hermes model，选择 provider / model。"
-  Say "飞书通道：运行 hermes gateway setup，在消息平台里选择 Feishu / Lark（如果当前 Hermes 版本支持）。"
+  Say "下面会进入 Hermes 自带英文向导，先看中文速查说明即可。"
   if (Confirm-Step "配置 Hermes 接口模型") {
+    Show-HermesModelGuide
     try { Invoke-Hermes @("model") } catch { Warn "Hermes 接口模型配置失败：$($_.Exception.Message)" }
   }
   if (Confirm-Step "配置 Hermes 飞书 / Lark 通道") {
+    Show-HermesGatewayGuide
     try { Invoke-Hermes @("gateway", "setup") } catch { Warn "Hermes 通道配置失败：$($_.Exception.Message)" }
   }
+}
+
+function Show-HermesModelGuide {
+  Step "Hermes 接口模型配置说明"
+  Say "即将运行：hermes model"
+  Say "常见英文提示对照："
+  Say "  Select provider：选择模型服务商。"
+  Say "  OpenAI ▸ / OpenAI Codex：如果你已经登录 Codex CLI，推荐选这个。"
+  Say "  Import these credentials?：是否导入现有 Codex 登录凭证；一般输入 y。"
+  Say "  Select default model：选择默认模型；不知道选哪个可用默认项，或选择 gpt-5.5。"
+  Say "  Leave unchanged / Skip：保持当前配置不变。"
+  Say "提示：如果你用 OpenRouter / Anthropic / OpenAI API，需要提前准备对应 API Key。"
+}
+
+function Show-HermesGatewayGuide {
+  Step "Hermes 飞书 / Lark 通道配置说明"
+  Say "即将运行：hermes gateway setup"
+  Say "常见英文提示对照："
+  Say "  Select a platform to configure：选择要配置的平台，选择 Feishu / Lark。"
+  Say "  Scan QR code...：扫码自动创建机器人，推荐选默认项。"
+  Say "  Enter existing App ID...：已有飞书应用时，手动输入 App ID 和 App Secret。"
+  Say "  Open this URL in Feishu / Lark on your phone：用手机飞书打开链接并授权。"
+  Say "  How should direct messages be authorized：私聊权限；新手可选 DM pairing approval，更开放可选 Allow all direct messages。"
+  Say "  How should group chats be handled：群聊响应方式；推荐 Respond only when @mentioned。"
+  Say "  Home chat ID：通知/定时任务默认发送到哪个会话；不确定可直接回车留空。"
+  Say "  Done：配置完 Feishu / Lark 后选择 Done 退出平台选择。"
 }
 
 function Get-HermesMissingPrereqs {

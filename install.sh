@@ -589,6 +589,43 @@ $roots
 EOF
 }
 
+whisper_model_cache_files(){
+  local model="$1" roots root
+  roots="
+${WHISPER_CACHE:-}
+${XDG_CACHE_HOME:-$HOME/.cache}/whisper
+$HOME/.cache/whisper
+"
+  while IFS= read -r root; do
+    [ -n "$root" ] && [ -d "$root" ] || continue
+    find "$root" -maxdepth 1 -type f -name "${model}*.pt" 2>/dev/null
+  done <<EOF
+$roots
+EOF
+}
+
+confirm_whisper_model_redownload(){
+  local model="$1" files answer file size
+  [ "$ASSUME_YES" = "1" ] && { printf '%s\n' "use"; return; }
+  files="$(whisper_model_cache_files "$model")"
+  [ -z "$files" ] && { printf '%s\n' "download"; return; }
+  warn "已存在 $model 模型缓存："
+  while IFS= read -r file; do
+    [ -n "$file" ] || continue
+    size="$(du -h "$file" 2>/dev/null | awk '{print $1}')"
+    say "  - $file${size:+（$size）}"
+  done <<EOF
+$files
+EOF
+  printf "${CYN}回车=使用现有缓存并校验；r=覆盖重新下载；s=跳过：${RST}"
+  IFS= read -r answer </dev/tty 2>/dev/null
+  case "$answer" in
+    r|R) printf '%s\n' "redownload" ;;
+    s|S) printf '%s\n' "skip" ;;
+    *) printf '%s\n' "use" ;;
+  esac
+}
+
 choose_whisper_model(){
   if [ -n "$WHISPER_MODEL_INPUT" ]; then
     WHISPER_MODEL="$(normalize_whisper_model "$WHISPER_MODEL_INPUT")"
@@ -635,9 +672,12 @@ download_whisper_model(){
   esac
   step "预下载 Whisper 模型：$model"
   say "${DIM}首次加载会下载模型文件，Whisper 会显示缓存和下载进度。${RST}"
-  local py attempt
+  local py attempt cache_choice
   py="$(main_python_cmd)"
   [ -n "$py" ] || { warn "Python 3 不可用，跳过 Whisper 模型预下载"; return; }
+  cache_choice="$(confirm_whisper_model_redownload "$model")"
+  [ "$cache_choice" = "skip" ] && { warn "已跳过 Whisper 模型：$model"; return; }
+  [ "$cache_choice" = "redownload" ] && clear_whisper_model_cache "$model"
   for attempt in 1 2 3; do
     say "${DIM}Whisper 模型下载尝试 $attempt/3：$model${RST}"
     "$py" - <<PY
@@ -1076,14 +1116,41 @@ configure_hermes_agent(){
     return
   fi
   say "可在这里配置 Hermes 的接口模型和消息通道。"
-  say "接口模型：运行 hermes model，选择 provider / model。"
-  say "飞书通道：运行 hermes gateway setup，在消息平台里选择 Feishu / Lark（如果当前 Hermes 版本支持）。"
+  say "下面会进入 Hermes 自带英文向导，先看中文速查说明即可。"
   if confirm "配置 Hermes 接口模型"; then
+    show_hermes_model_guide
     hermes model
   fi
   if confirm "配置 Hermes 飞书 / Lark 通道"; then
+    show_hermes_gateway_guide
     hermes gateway setup
   fi
+}
+
+show_hermes_model_guide(){
+  step "Hermes 接口模型配置说明"
+  say "即将运行：hermes model"
+  say "常见英文提示对照："
+  say "  Select provider：选择模型服务商。"
+  say "  OpenAI ▸ / OpenAI Codex：如果你已经登录 Codex CLI，推荐选这个。"
+  say "  Import these credentials?：是否导入现有 Codex 登录凭证；一般输入 y。"
+  say "  Select default model：选择默认模型；不知道选哪个可用默认项，或选择 gpt-5.5。"
+  say "  Leave unchanged / Skip：保持当前配置不变。"
+  say "提示：如果你用 OpenRouter / Anthropic / OpenAI API，需要提前准备对应 API Key。"
+}
+
+show_hermes_gateway_guide(){
+  step "Hermes 飞书 / Lark 通道配置说明"
+  say "即将运行：hermes gateway setup"
+  say "常见英文提示对照："
+  say "  Select a platform to configure：选择要配置的平台，选择 Feishu / Lark。"
+  say "  Scan QR code...：扫码自动创建机器人，推荐选默认项。"
+  say "  Enter existing App ID...：已有飞书应用时，手动输入 App ID 和 App Secret。"
+  say "  Open this URL in Feishu / Lark on your phone：用手机飞书打开链接并授权。"
+  say "  How should direct messages be authorized：私聊权限；新手可选 DM pairing approval，更开放可选 Allow all direct messages。"
+  say "  How should group chats be handled：群聊响应方式；推荐 Respond only when @mentioned。"
+  say "  Home chat ID：通知/定时任务默认发送到哪个会话；不确定可直接回车留空。"
+  say "  Done：配置完 Feishu / Lark 后选择 Done 退出平台选择。"
 }
 
 install_codex_cli(){

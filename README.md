@@ -166,7 +166,7 @@ Windows:
 | `large` | `large` | 约 2.9GB | 1.55B | 准确率最高，下载最大，运行最重 |
 | `skip` | 不预下载 | 0 | - | 首次使用 Whisper 时再下载 |
 
-再次运行脚本时，如果 Whisper 已安装，脚本会先检测并展示本机已缓存的模型，然后仍然进入模型选择；可以选择新的模型继续预下载，也可以选择 `skip` 跳过。
+再次运行脚本时，如果 Whisper 已安装，脚本会先检测并展示本机已缓存的模型，然后仍然进入模型选择；可以选择新的模型继续预下载，也可以选择 `skip` 跳过。如果选择的模型已经存在，会提示使用现有缓存、覆盖重新下载或跳过。
 
 Whisper 模型下载如果中断或校验失败，脚本会自动删除当前模型的损坏缓存并重试，最多重试 3 次；不会删除其他已缓存模型。
 
@@ -176,6 +176,13 @@ Whisper 模型下载如果中断或校验失败，脚本会自动删除当前模
 - Homebrew：官方安装脚本 `https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh`
 - Hermes Agent：官方安装脚本 `https://hermes-agent.nousresearch.com/install.sh` / `install.ps1`
 - Hermes 配置：安装完成后会可选运行 `hermes model` 设置接口模型，并可选运行 `hermes gateway setup` 配置消息通道；飞书通道在 Hermes 当前版本支持时可在 gateway setup 中选择 Feishu / Lark。自动模式会跳过这些交互配置，可稍后手动执行这两个命令
+  - `Select provider`：选择模型服务商；已登录 Codex CLI 时可选 `OpenAI` -> `OpenAI Codex`
+  - `Import these credentials?`：是否导入已有 Codex 登录凭证，一般输入 `y`
+  - `Select default model`：选择默认模型，不确定可用默认项或 `gpt-5.5`
+  - `Select a platform to configure`：选择消息平台，飞书选择 `Feishu / Lark`
+  - `Scan QR code...`：扫码自动创建机器人，推荐默认项
+  - `How should direct messages be authorized`：私聊权限，新手推荐 `DM pairing approval`
+  - `How should group chats be handled`：群聊响应方式，推荐只在被 @ 时响应
 - Codex CLI：官方安装脚本 `https://chatgpt.com/codex/install.sh` / `install.ps1`
 - ChatGPT / Codex Desktop：macOS 检查 `/Applications/ChatGPT.app` 和 `/Applications/Codex.app`；Windows 检查 Appx 包、WindowsApps 下的 `OpenAI.Codex_*\\app\\ChatGPT.exe`、常见本地安装目录
 - Node.js：macOS 会先加载已有 nvm，再优先 Homebrew，否则使用 nvm；Windows 会先加载常见 nvm-windows 路径，否则下载官方 Node.js LTS zip；管理员 PowerShell 安装到 `C:\Program Files\nodejs` 并写入系统 PATH，非管理员回退到用户目录并写入用户 PATH
