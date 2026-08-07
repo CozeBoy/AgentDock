@@ -166,11 +166,12 @@ function Show-LarkAuthStatus {
 function Ensure-LarkCliBinding {
   $status = Get-LarkAuthStatus
   if (-not (Test-LarkCliNeedsBind $status)) { return $true }
-  Say "需要先把 Hermes 的飞书应用配置绑定到 lark-cli，然后才能发起用户授权。"
-  Say "身份策略说明："
-  Say "  1) bot-only：只使用机器人身份，更安全；不能访问个人日历、邮箱、云文档等用户资源。"
-  Say "  2) user-default：允许用户身份，适合需要访问个人资源的课程/工作流。"
-  if (-not (Confirm-Step "绑定 Hermes 飞书配置到 lark-cli")) { return $false }
+  Say "说明：lark-cli 可以独立授权；只有想复用 Hermes Agent 里创建的飞书应用时，才需要绑定 Hermes 配置。"
+  Say "如果只是给 lark-cli 单独授权，推荐先跳过绑定，再按提示执行 auth login。"
+  Say "绑定身份策略："
+  Say "  1) bot-only：只使用 Hermes 机器人身份，更安全；不能访问个人日历、邮箱、云文档等用户资源。"
+  Say "  2) user-default：复用 Hermes 应用并允许用户身份，适合需要访问个人资源的工作流。"
+  if (-not (Confirm-Step "复用 Hermes 飞书应用并绑定到 lark-cli")) { return $true }
   $choice = Read-Host "选择身份策略 [1=bot-only / 2=user-default，默认 2]"
   $identity = if ($choice -eq "1") { "bot-only" } else { "user-default" }
   try {
@@ -1609,8 +1610,8 @@ function Get-HermesModelSummary {
 function Test-HermesFeishuGatewayConfigured {
   $path = Get-HermesConfigPath
   if (-not $path) { return $false }
-  $home = Split-Path $path -Parent
-  $profileDir = Join-Path $home "profiles"
+  $hermesHome = Split-Path $path -Parent
+  $profileDir = Join-Path $hermesHome "profiles"
   if (-not (Test-Path $profileDir)) { return $false }
   try {
     $files = Get-ChildItem -Path $profileDir -Filter "channel_directory.json" -Recurse -ErrorAction SilentlyContinue
