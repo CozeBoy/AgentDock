@@ -37,6 +37,8 @@ $OriginalGitHttpProxy = $null
 $OriginalGitHttpsProxy = $null
 $OriginalNoColor = $env:NO_COLOR
 $NoColorApplied = $false
+$YtDlpModulesRequested = $false
+$WhisperModulesRequested = $false
 
 function Say($Text) { Write-Host $Text }
 function Ok($Text) { Write-Host "OK $Text" -ForegroundColor Green }
@@ -335,15 +337,123 @@ function Install-NpmGlobal([string]$PackageName) {
 function Install-PipUser([string]$PythonCommand, [string[]]$PipArgs) {
   if ($ProxyUrl) {
     Say "执行：$PythonCommand -m pip install --user $($PipArgs -join ' ')（走代理访问官方 PyPI）"
-    & $PythonCommand -m pip install --user --index-url "https://pypi.org/simple" @PipArgs
+    $args = @("-m", "pip", "install", "--user", "--index-url", "https://pypi.org/simple") + $PipArgs
+    Invoke-PythonCommand $PythonCommand $args
     return
   }
   Say "执行：$PythonCommand -m pip install --user $($PipArgs -join ' ')（优先 pip 国内镜像）"
-  Invoke-WithoutProxy { & $PythonCommand -m pip install --user --index-url "https://pypi.tuna.tsinghua.edu.cn/simple" --extra-index-url "https://mirrors.aliyun.com/pypi/simple" --extra-index-url "https://pypi.org/simple" @PipArgs }
+  $mirrorArgs = @("-m", "pip", "install", "--user", "--index-url", "https://pypi.tuna.tsinghua.edu.cn/simple", "--extra-index-url", "https://mirrors.aliyun.com/pypi/simple", "--extra-index-url", "https://pypi.org/simple") + $PipArgs
+  Invoke-WithoutProxy { Invoke-PythonCommand $PythonCommand $mirrorArgs }
   if ($LASTEXITCODE -ne 0) {
     Warn "pip 国内镜像安装失败，切换官方源直连重试"
-    & $PythonCommand -m pip install --user --index-url "https://pypi.org/simple" @PipArgs
+    $officialArgs = @("-m", "pip", "install", "--user", "--index-url", "https://pypi.org/simple") + $PipArgs
+    Invoke-PythonCommand $PythonCommand $officialArgs
   }
+}
+
+function Get-PythonIdentity([string]$PythonCommand) {
+  try {
+    $code = "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}:{sys.executable}')"
+    $result = Invoke-PythonCommand $PythonCommand @("-c", $code) 2>$null
+    if ($LASTEXITCODE -eq 0 -and $result) { return ($result | Select-Object -First 1) }
+  } catch {}
+  return $null
+}
+
+function Test-PythonCommand([string]$PythonCommand) {
+  try {
+    Invoke-PythonCommand $PythonCommand @("--version") *> $null
+    return ($LASTEXITCODE -eq 0)
+  } catch {
+    return $false
+  }
+}
+
+function Get-PythonTargets {
+  $raw = New-Object System.Collections.Generic.List[string]
+  $python311 = Get-Python311Command
+  if ($python311) { $raw.Add($python311) }
+  if (HasCommand "py") {
+    $raw.Add("py -3.11")
+    $raw.Add("py -3")
+    try {
+      py -0p 2>$null | ForEach-Object {
+        $line = "$_".Trim()
+        if ($line -match '([A-Za-z]:\\.*python\.exe)$') {
+          $raw.Add($matches[1])
+        }
+      }
+    } catch {}
+  }
+  if (HasCommand "python") { $raw.Add("python") }
+  if (HasCommand "python3") { $raw.Add("python3") }
+
+  foreach ($pattern in @("$env:ProgramFiles\Python*", "$env:LOCALAPPDATA\Programs\Python\Python*", "$env:APPDATA\Python\Python*")) {
+    try {
+      Get-ChildItem -Path $pattern -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+        $exe = Join-Path $_.FullName "python.exe"
+        if (Test-Path $exe) { $raw.Add($exe) }
+      }
+    } catch {}
+  }
+
+  foreach ($root in @("$env:LOCALAPPDATA\hermes", "$env:USERPROFILE\.hermes", "$env:LOCALAPPDATA\uv\python", "$env:APPDATA\uv\python")) {
+    if (-not $root -or -not (Test-Path $root)) { continue }
+    try {
+      Get-ChildItem -Path $root -Filter "python.exe" -File -Recurse -ErrorAction SilentlyContinue | ForEach-Object {
+        $raw.Add($_.FullName)
+      }
+    } catch {}
+  }
+
+  $seen = @{}
+  foreach ($candidate in $raw) {
+    if (-not $candidate) { continue }
+    if (-not (Test-PythonCommand $candidate)) { continue }
+    $identity = Get-PythonIdentity $candidate
+    if (-not $identity -or $seen.ContainsKey($identity)) { continue }
+    $seen[$identity] = $true
+    $candidate
+  }
+}
+
+function Get-MainPythonCommand {
+  $python311 = Get-Python311Command
+  if ($python311) { return $python311 }
+  if (HasCommand "python") { return "python" }
+  if (HasCommand "py") { return "py -3" }
+  return $null
+}
+
+function Get-PythonUserScripts([string]$PythonCommand) {
+  try {
+    $base = Invoke-PythonCommand $PythonCommand @("-m", "site", "--user-base") 2>$null | Select-Object -First 1
+    if ($base) { return (Join-Path $base "Scripts") }
+  } catch {}
+  return $null
+}
+
+function Install-PythonModuleAll([string]$PackageName, [string]$Label) {
+  $installed = $false
+  foreach ($python in (Get-PythonTargets)) {
+    Say "为 Python 安装 $Label 模块：$python"
+    Install-PipUser $python @("--upgrade", $PackageName)
+    if ($LASTEXITCODE -eq 0) { $installed = $true }
+  }
+  $mainPython = Get-MainPythonCommand
+  if ($mainPython) {
+    $scripts = Get-PythonUserScripts $mainPython
+    if ($scripts -and (Test-Path $scripts)) { Add-UserPath $scripts }
+  }
+  return $installed
+}
+
+function Install-YtDlpModules {
+  return (Install-PythonModuleAll "yt-dlp" "yt-dlp")
+}
+
+function Install-WhisperModules {
+  return (Install-PythonModuleAll "openai-whisper" "Whisper")
 }
 
 function Enable-GitHttpsRewrite {
@@ -477,13 +587,13 @@ function Choose-WhisperModel {
   if ($Yes) { return "turbo" }
   Step "Whisper 模型选择"
   Say "选择要预下载的 Whisper 模型："
-  Say "  1) fast / turbo：速度优先，推荐日常使用"
-  Say "  2) normal / base：常规模型，体积较小"
-  Say "  3) tiny：最快，准确率较低"
-  Say "  4) small：更准，下载更大"
-  Say "  5) medium：较准，下载较大"
-  Say "  6) large：最准，下载最大"
-  Say "  7) 跳过预下载"
+  Say "  1) fast / turbo：约 1.6GB，809M 参数，速度优先，推荐日常使用"
+  Say "  2) normal / base：约 142MB，74M 参数，常规轻量，适合快速试用"
+  Say "  3) tiny：约 75MB，39M 参数，最快，准确率较低"
+  Say "  4) small：约 466MB，244M 参数，准确率更好，资源占用适中"
+  Say "  5) medium：约 1.5GB，769M 参数，准确率较高，下载和运行都更重"
+  Say "  6) large：约 2.9GB，1.55B 参数，准确率最高，下载最大，运行最重"
+  Say "  7) skip：跳过预下载，首次使用 Whisper 时再下载"
   $choice = Read-Host "输入序号或模型名 [默认 1]"
   if ([string]::IsNullOrWhiteSpace($choice)) { $choice = "1" }
   switch ($choice) {
@@ -509,7 +619,9 @@ function Download-WhisperModel([string]$Model) {
   }
   Step "预下载 Whisper 模型：$Model"
   Say "首次加载会下载模型文件，Whisper 会显示缓存和下载进度。"
-  python -c "import whisper; whisper.load_model('$Model'); print('Whisper model ready: $Model')"
+  $mainPython = Get-MainPythonCommand
+  if (-not $mainPython) { Fail "未检测到可用 Python，无法预下载 Whisper 模型"; return }
+  Invoke-PythonCommand $mainPython @("-c", "import whisper; whisper.load_model('$Model'); print('Whisper model ready: $Model')")
 }
 
 function Format-ByteSize([double]$Bytes) {
@@ -845,6 +957,16 @@ function Get-Python311Version([string]$Command) {
   return (& $Command --version)
 }
 
+function Invoke-PythonCommand([string]$PythonCommand, [string[]]$Arguments) {
+  if ($PythonCommand -eq "py -3.11") {
+    & py -3.11 @Arguments
+  } elseif ($PythonCommand -eq "py -3") {
+    & py -3 @Arguments
+  } else {
+    & $PythonCommand @Arguments
+  }
+}
+
 function Get-PythonInstallerUrl([string]$MinorVersion) {
   $archSuffix = if ((Get-WindowsArchName) -eq "arm64") { "arm64" } else { "amd64" }
   $pageFile = Join-Path $env:TEMP "python-windows.html"
@@ -902,6 +1024,27 @@ function Ensure-Ffmpeg {
   if (-not (Confirm-Step "安装 ffmpeg（Whisper 处理音频需要）")) { return $false }
   Install-FfmpegFromOfficialZip
   return (HasCommand "ffmpeg")
+}
+
+function Ensure-YtDlp {
+  if (HasCommand "yt-dlp") {
+    Ok "yt-dlp 命令已安装：$(yt-dlp --version | Select-Object -First 1)"
+  } elseif ($Check) {
+    Warn "yt-dlp 未安装"
+    return $false
+  }
+  if ($Check) { return $true }
+  if (-not (Confirm-Step "为可用 Python 安装 / 更新 yt-dlp 模块（保留主 Python 命令入口）")) { return $false }
+  $script:YtDlpModulesRequested = $true
+  Ensure-Python | Out-Null
+  Install-YtDlpModules | Out-Null
+  Register-PythonPaths
+  Refresh-ProcessPath
+  if (-not (HasCommand "yt-dlp")) {
+    Warn "pip 安装后仍未检测到 yt-dlp 命令，改用官方 exe 兜底安装"
+    Install-YtDlpFromGithubExe
+  }
+  return (HasCommand "yt-dlp")
 }
 
 function Ensure-Ripgrep {
@@ -964,6 +1107,25 @@ function Install-FfmpegFromOfficialZip {
   }
 }
 
+function Install-YtDlpFromGithubExe {
+  $exeUrl = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe"
+  $targetRoot = Get-InstallRoot "yt-dlp"
+  if (-not (Test-IsAdministrator)) { Warn "当前不是管理员，yt-dlp 将安装到用户目录：$targetRoot" }
+  New-Item -ItemType Directory -Force -Path $targetRoot | Out-Null
+  $targetExe = Join-Path $targetRoot "yt-dlp.exe"
+  Say "准备下载 yt-dlp：$exeUrl"
+  Download-WithFallback $exeUrl $targetExe | Out-Null
+  if (-not (Test-Path $targetExe)) { throw "yt-dlp 下载后未找到可执行文件" }
+  if (Test-IsAdministrator) {
+    Add-MachinePath $targetRoot
+    Ok "yt-dlp 已安装到系统目录：$targetExe"
+  } else {
+    Add-UserPath $targetRoot
+    Ok "yt-dlp 已安装到用户目录：$targetExe"
+  }
+  Refresh-ProcessPath
+}
+
 function Install-Hermes {
   Step "Hermes Agent"
   if (HasCommand "hermes") { Ok "Hermes 已安装：$(hermes --version | Select-Object -First 1)"; return }
@@ -984,6 +1146,18 @@ function Install-Hermes {
     Say "提示：Hermes 后续可能会安装自己的 npm/browser tools 依赖，这是项目依赖，不是重新安装 Node.js。"
     powershell -ExecutionPolicy Bypass -File $script
     Register-ToolPaths
+    if ($script:YtDlpModulesRequested) {
+      Say "Hermes 安装后同步 yt-dlp 到新检测到的 Python 环境"
+      Install-YtDlpModules | Out-Null
+      Register-PythonPaths
+      Refresh-ProcessPath
+    }
+    if ($script:WhisperModulesRequested) {
+      Say "Hermes 安装后同步 Whisper 到新检测到的 Python 环境"
+      Install-WhisperModules | Out-Null
+      Register-PythonPaths
+      Refresh-ProcessPath
+    }
   } catch {
     Fail "Hermes 安装脚本下载或执行失败：$($_.Exception.Message)"
   }
@@ -1142,6 +1316,11 @@ function Install-Ffmpeg {
   Ensure-Ffmpeg | Out-Null
 }
 
+function Install-YtDlp {
+  Step "yt-dlp"
+  Ensure-YtDlp | Out-Null
+}
+
 function Install-Ripgrep {
   Step "ripgrep"
   Ensure-Ripgrep | Out-Null
@@ -1155,14 +1334,16 @@ function Install-Whisper {
   if ($Check) { return }
   Ensure-Python | Out-Null
   Ensure-Ffmpeg | Out-Null
-  if (-not (HasCommand "python")) { Fail "Python 不可用，无法安装 Whisper"; return }
+  $mainPython = Get-MainPythonCommand
+  if (-not $mainPython) { Fail "Python 不可用，无法安装 Whisper"; return }
   if (-not $whisperInstalled) {
-    if (-not (Confirm-Step "安装 Whisper（openai-whisper Python 包）")) { return }
-    Install-PipUser "python" @("--upgrade", "pip")
-    Install-PipUser "python" @("--upgrade", "openai-whisper")
+    if (-not (Confirm-Step "为可用 Python 安装 / 更新 Whisper 模块（保留主 Python 命令入口）")) { return }
+    $script:WhisperModulesRequested = $true
+    Install-PythonModuleAll "pip" "pip" | Out-Null
+    Install-WhisperModules | Out-Null
   }
-  $pythonUserBase = (python -m site --user-base 2>$null)
-  if ($pythonUserBase) { Add-UserPath (Join-Path $pythonUserBase "Scripts") }
+  $pythonScripts = Get-PythonUserScripts $mainPython
+  if ($pythonScripts) { Add-UserPath $pythonScripts }
   Register-PythonPaths
   Refresh-ProcessPath
   $model = Choose-WhisperModel
@@ -1178,6 +1359,7 @@ function Check-All {
   $python311 = Get-Python311Command
   if ($python311) { Ok "Python 3.11：$(Get-Python311Version $python311)" } else { Warn "Python 3.11：未安装" }
   if (HasCommand "ffmpeg") { Ok "ffmpeg：已安装" } else { Warn "ffmpeg：未安装" }
+  if (HasCommand "yt-dlp") { Ok "yt-dlp：$(yt-dlp --version | Select-Object -First 1)" } else { Warn "yt-dlp：未安装" }
   if (HasCommand "rg") { Ok "ripgrep：$(rg --version | Select-Object -First 1)" } else { Warn "ripgrep：未安装" }
   if (HasCommand "hermes") { Ok "Hermes：$(hermes --version | Select-Object -First 1)" } else { Warn "Hermes：未安装" }
   if (HasCommand "codex") { Ok "Codex CLI：$(codex --version | Select-Object -First 1)" } else { Warn "Codex CLI：未安装" }
@@ -1201,6 +1383,7 @@ Enable-GitHttpsRewrite
 Install-Node
 Install-Python
 Install-Ffmpeg
+Install-YtDlp
 Install-Ripgrep
 Install-Hermes
 Install-CodexCli

@@ -56,7 +56,7 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1
 
 交互确认不会自动安装：按回车继续，输入 `s` 跳过当前步骤，输入 `q` 退出并保留终端窗口。如果某个环境已经安装但脚本没有检测到，建议输入 `s` 跳过。
 
-Windows 会按权限选择安装位置：管理员 PowerShell 优先安装到 `C:\Program Files` 并写入系统 PATH；非管理员回退到 `%LOCALAPPDATA%\Programs` / 用户目录并写入用户 PATH。Node.js、Python、ffmpeg、npm 全局命令、Python Scripts、Hermes/Codex 常见命令目录都会刷新到当前脚本进程；新开的 PowerShell 也会继承这些路径。
+Windows 会按权限选择安装位置：管理员 PowerShell 优先安装到 `C:\Program Files` 并写入系统 PATH；非管理员回退到 `%LOCALAPPDATA%\Programs` / 用户目录并写入用户 PATH。Node.js、Python、ffmpeg、yt-dlp、npm 全局命令、Python Scripts、Hermes/Codex 常见命令目录都会刷新到当前脚本进程；新开的 PowerShell 也会继承这些路径。
 
 Windows 如果不是管理员 PowerShell，脚本会提醒是否弹出 UAC 并以管理员身份重新运行。选择同意后会优先安装到 `C:\Program Files`；选择否，则继续使用用户目录安装。
 
@@ -66,7 +66,7 @@ macOS 也会维护 PATH：安装模式会写入 Homebrew、`~/.local/bin`、Herm
 
 1. macOS 基础依赖：Xcode Command Line Tools、Homebrew
 2. 通用运行环境：nvm / Node.js、Python 3.11
-3. Hermes/Whisper 依赖：ffmpeg、ripgrep（Windows）
+3. 媒体 / Hermes 依赖：ffmpeg、yt-dlp、ripgrep（Windows）
 4. Agent 工具：Hermes Agent、Codex CLI、ChatGPT / Codex Desktop、飞书 CLI
 5. Whisper
 
@@ -134,6 +134,18 @@ Windows:
 - `-NoProxy`：不使用代理。
 - `-WhisperModel <model>`：安装后预下载 Whisper 模型，可选 `fast`、`normal`、`tiny`、`base`、`small`、`medium`、`large`、`turbo`、`skip`。
 
+## Whisper 模型参考
+
+| 选项 | 实际模型 | 大致下载体积 | 参数量 | 说明 |
+| --- | --- | ---: | ---: | --- |
+| `fast` | `turbo` | 约 1.6GB | 809M | 速度优先，推荐日常使用 |
+| `normal` | `base` | 约 142MB | 74M | 常规轻量，适合快速试用 |
+| `tiny` | `tiny` | 约 75MB | 39M | 最快，准确率较低 |
+| `small` | `small` | 约 466MB | 244M | 准确率更好，资源占用适中 |
+| `medium` | `medium` | 约 1.5GB | 769M | 准确率较高，下载和运行都更重 |
+| `large` | `large` | 约 2.9GB | 1.55B | 准确率最高，下载最大，运行最重 |
+| `skip` | 不预下载 | 0 | - | 首次使用 Whisper 时再下载 |
+
 ## 安装来源
 
 - Xcode Command Line Tools：macOS 系统自带 `xcode-select --install`
@@ -145,5 +157,6 @@ Windows:
 - 飞书 CLI：npm 包 `@larksuite/cli`
 - Python 3.11：Hermes Agent 明确检查 Python 3.11；脚本会并行安装 Python 3.11，不会删除或覆盖已有 Python 版本；macOS 优先 Homebrew；Windows 下载 python.org 官方 Python 3.11 安装器
 - ffmpeg：macOS 使用 Homebrew；Windows 下载 gyan.dev 官方 zip 并解压到系统/用户目录
+- yt-dlp：优先通过 Python 模块安装（`python -m pip install --user --upgrade yt-dlp`）；会尽量给已安装 Python、主 Python 3.11、Hermes/uv 管理的 Python 3.11 都安装模块，但只把主 Python 的用户脚本目录作为命令入口优先加入 PATH。Windows 如果 pip 安装后仍未检测到命令，会下载 GitHub 官方 `yt-dlp.exe` 兜底
 - ripgrep：Windows 会在 Hermes Agent 前预装 ripgrep，避免 Hermes 子安装器再走 winget
-- Whisper：Python 包 `openai-whisper`，模型支持 `fast/turbo`、`normal/base`、`tiny`、`small`、`medium`、`large`
+- Whisper：Python 包 `openai-whisper`，会尽量给已安装 Python、主 Python 3.11、Hermes/uv 管理的 Python 3.11 都安装模块，但只把主 Python 的用户脚本目录作为命令入口优先加入 PATH；安装模块后会单独选择是否预下载模型，支持 `fast/turbo`、`normal/base`、`tiny`、`small`、`medium`、`large`、`skip`

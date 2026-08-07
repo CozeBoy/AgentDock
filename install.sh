@@ -26,6 +26,8 @@ ASSUME_YES=0
 PROXY_INPUT=""
 NO_PROXY_MODE=0
 WHISPER_MODEL_INPUT=""
+YTDLP_MODULES_REQUESTED=0
+WHISPER_MODULES_REQUESTED=0
 
 ORIGINAL_http_proxy="${http_proxy-}"
 ORIGINAL_https_proxy="${https_proxy-}"
@@ -495,13 +497,13 @@ choose_whisper_model(){
 
   step "Whisper 模型选择"
   say "选择要预下载的 Whisper 模型："
-  say "  1) fast / turbo：速度优先，推荐日常使用"
-  say "  2) normal / base：常规模型，体积较小"
-  say "  3) tiny：最快，准确率较低"
-  say "  4) small：更准，下载更大"
-  say "  5) medium：较准，下载较大"
-  say "  6) large：最准，下载最大"
-  say "  7) 跳过预下载"
+  say "  1) fast / turbo：约 1.6GB，809M 参数，速度优先，推荐日常使用"
+  say "  2) normal / base：约 142MB，74M 参数，常规轻量，适合快速试用"
+  say "  3) tiny：约 75MB，39M 参数，最快，准确率较低"
+  say "  4) small：约 466MB，244M 参数，准确率更好，资源占用适中"
+  say "  5) medium：约 1.5GB，769M 参数，准确率较高，下载和运行都更重"
+  say "  6) large：约 2.9GB，1.55B 参数，准确率最高，下载最大，运行最重"
+  say "  7) skip：跳过预下载，首次使用 Whisper 时再下载"
   printf "${CYN}输入序号或模型名 [默认 1]：${RST}"
   IFS= read -r model_choice </dev/tty 2>/dev/null
   model_choice="${model_choice:-1}"
@@ -741,6 +743,73 @@ python311_cmd(){
   return 1
 }
 
+python_version_key(){
+  "$1" - <<'PY' 2>/dev/null
+import sys
+print(f"{sys.version_info.major}.{sys.version_info.minor}:{sys.executable}")
+PY
+}
+
+list_python_targets(){
+  local candidate key seen=""
+  for candidate in \
+    "$(python311_cmd 2>/dev/null)" \
+    "python3.11" \
+    "python3" \
+    "python" \
+    "$HOME/.local/share/uv/python"/*/bin/python3.11 \
+    "$HOME/.cache/uv/python"/*/bin/python3.11 \
+    "$HOME/.hermes"/*/bin/python3.11 \
+    "$HOME/Library/Application Support/uv/python"/*/bin/python3.11
+  do
+    [ -n "$candidate" ] || continue
+    if [ -x "$candidate" ] || command -v "$candidate" >/dev/null 2>&1; then
+      key="$(python_version_key "$candidate")"
+      [ -n "$key" ] || continue
+      case "|$seen|" in *"|$key|"*) continue ;; esac
+      seen="${seen}|$key"
+      printf '%s\n' "$candidate"
+    fi
+  done
+}
+
+main_python_cmd(){
+  if python311_cmd >/dev/null 2>&1; then
+    python311_cmd
+  elif has_cmd python3; then
+    printf '%s\n' "python3"
+  elif has_cmd python; then
+    printf '%s\n' "python"
+  fi
+}
+
+install_python_module_all(){
+  local package_name="$1" label="$2" py main_py python_user_bin installed=0
+  main_py="$(main_python_cmd)"
+  while IFS= read -r py; do
+    [ -n "$py" ] || continue
+    say "${DIM}为 Python 安装 $label 模块：$py${RST}"
+    if pip_install_user "$py" --upgrade "$package_name"; then
+      installed=1
+    fi
+  done <<EOF
+$(list_python_targets)
+EOF
+  if [ -n "$main_py" ]; then
+    python_user_bin="$("$main_py" -m site --user-base 2>/dev/null)/bin"
+    add_path_once "$python_user_bin" "Python 用户命令"
+  fi
+  return "$installed"
+}
+
+install_ytdlp_modules(){
+  install_python_module_all "yt-dlp" "yt-dlp"
+}
+
+install_whisper_modules(){
+  install_python_module_all "openai-whisper" "Whisper"
+}
+
 ensure_ffmpeg(){
   has_cmd ffmpeg && { ok "ffmpeg 已安装"; return 0; }
   [ "$CHECK_ONLY" = "1" ] && { warn "ffmpeg 未安装"; return 1; }
@@ -753,6 +822,22 @@ ensure_ffmpeg(){
     return 1
   fi
   refresh_common_paths
+}
+
+ensure_ytdlp(){
+  if has_cmd yt-dlp; then
+    ok "yt-dlp 命令已安装：$(yt-dlp --version 2>/dev/null | head -1)"
+  elif [ "$CHECK_ONLY" = "1" ]; then
+    warn "yt-dlp 未安装"
+    return 1
+  fi
+  [ "$CHECK_ONLY" = "1" ] && return 0
+  confirm "为可用 Python 安装 / 更新 yt-dlp 模块（保留主 Python 命令入口）" || return 1
+  YTDLP_MODULES_REQUESTED=1
+  ensure_python || return 1
+  install_ytdlp_modules
+  refresh_common_paths
+  has_cmd yt-dlp && ok "yt-dlp 安装完成：$(yt-dlp --version 2>/dev/null | head -1)"
 }
 
 install_hermes(){
@@ -768,6 +853,16 @@ install_hermes(){
   add_path_once "$HOME/.local/bin" "Hermes"
   add_path_once "$HOME/.hermes/bin" "Hermes"
   refresh_common_paths
+  if [ "$YTDLP_MODULES_REQUESTED" = "1" ]; then
+    say "${DIM}Hermes 安装后同步 yt-dlp 到新检测到的 Python 环境${RST}"
+    install_ytdlp_modules
+    refresh_common_paths
+  fi
+  if [ "$WHISPER_MODULES_REQUESTED" = "1" ]; then
+    say "${DIM}Hermes 安装后同步 Whisper 到新检测到的 Python 环境${RST}"
+    install_whisper_modules
+    refresh_common_paths
+  fi
 }
 
 install_codex_cli(){
@@ -857,13 +952,11 @@ install_whisper(){
   ensure_python || return
   ensure_ffmpeg
   if [ "$whisper_installed" = "0" ]; then
-    confirm "安装 Whisper（openai-whisper Python 包）" || return
-    pip_install_user "$(python311_cmd)" --upgrade pip
-    pip_install_user "$(python311_cmd)" --upgrade openai-whisper
+    confirm "为可用 Python 安装 / 更新 Whisper 模块（保留主 Python 命令入口）" || return
+    WHISPER_MODULES_REQUESTED=1
+    install_python_module_all "pip" "pip"
+    install_whisper_modules
   fi
-  local python_user_bin
-  python_user_bin="$("$(python311_cmd)" -m site --user-base 2>/dev/null)/bin"
-  add_path_once "$python_user_bin" "Python 用户命令"
   refresh_common_paths
   choose_whisper_model
   download_whisper_model "$WHISPER_MODEL"
@@ -883,6 +976,7 @@ check_all(){
   detect_codex_desktop >/dev/null 2>&1 && ok "ChatGPT / Codex Desktop：$(detect_codex_desktop)" || warn "ChatGPT / Codex Desktop：未检测到"
   has_cmd lark-cli && ok "lark-cli：$(lark-cli --version 2>/dev/null | head -1)" || warn "lark-cli：未安装"
   has_cmd ffmpeg && ok "ffmpeg：已安装" || warn "ffmpeg：未安装"
+  has_cmd yt-dlp && ok "yt-dlp：$(yt-dlp --version 2>/dev/null | head -1)" || warn "yt-dlp：未安装"
   has_cmd whisper || { python311_cmd >/dev/null 2>&1 && "$(python311_cmd)" -m whisper --help >/dev/null 2>&1; } && ok "Whisper：已安装" || warn "Whisper：未安装"
 }
 
@@ -902,11 +996,12 @@ main(){
   install_homebrew
   install_node
   install_python
+  ensure_ffmpeg
+  ensure_ytdlp
   install_hermes
   install_codex_cli
   install_codex_desktop
   install_lark_cli
-  ensure_ffmpeg
   install_whisper
   check_all
   hr
