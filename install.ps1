@@ -10,20 +10,41 @@ $ErrorActionPreference = "Continue"
 $ProgressPreference = "SilentlyContinue"
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-$OriginalProxyEnv = @{
-  HTTP_PROXY = $env:HTTP_PROXY
-  HTTPS_PROXY = $env:HTTPS_PROXY
-  ALL_PROXY = $env:ALL_PROXY
-  http_proxy = $env:http_proxy
-  https_proxy = $env:https_proxy
-  all_proxy = $env:all_proxy
-  PIP_PROXY = $env:PIP_PROXY
-  PIP_INDEX_URL = $env:PIP_INDEX_URL
-  PIP_EXTRA_INDEX_URL = $env:PIP_EXTRA_INDEX_URL
-  UV_DEFAULT_INDEX = $env:UV_DEFAULT_INDEX
-  UV_INDEX = $env:UV_INDEX
-  UV_INDEX_URL = $env:UV_INDEX_URL
+$ProxyEnvNames = @(
+  "HTTP_PROXY",
+  "HTTPS_PROXY",
+  "ALL_PROXY",
+  "http_proxy",
+  "https_proxy",
+  "all_proxy",
+  "PIP_PROXY",
+  "PIP_INDEX_URL",
+  "PIP_EXTRA_INDEX_URL",
+  "UV_DEFAULT_INDEX",
+  "UV_INDEX",
+  "UV_INDEX_URL"
+)
+
+function Save-EnvironmentVariables([string[]]$Names) {
+  foreach ($name in $Names) {
+    [pscustomobject]@{
+      Name = $name
+      Value = [Environment]::GetEnvironmentVariable($name, "Process")
+    }
+  }
 }
+
+function Restore-EnvironmentVariables($SavedItems) {
+  foreach ($item in $SavedItems) {
+    if ([string]::IsNullOrEmpty($item.Value)) {
+      Remove-Item "Env:$($item.Name)" -ErrorAction SilentlyContinue
+    } else {
+      Set-Item "Env:$($item.Name)" $item.Value
+    }
+  }
+}
+
+$OriginalProxyEnv = @(Save-EnvironmentVariables $ProxyEnvNames)
 $ProxyEnvApplied = $false
 $PackageMirrorsApplied = $false
 $NpmProxyChanged = $false
@@ -206,14 +227,7 @@ function Restore-ProxyEnvironment {
     }
   }
   if ($script:ProxyEnvApplied) {
-    foreach ($key in $script:OriginalProxyEnv.Keys) {
-      $value = $script:OriginalProxyEnv[$key]
-      if ([string]::IsNullOrEmpty($value)) {
-        Remove-Item "Env:$key" -ErrorAction SilentlyContinue
-      } else {
-        Set-Item "Env:$key" $value
-      }
-    }
+    Restore-EnvironmentVariables $script:OriginalProxyEnv
   }
   if ($script:NpmProxyChanged -and (HasCommand "npm")) {
     if ($script:OriginalNpmProxy) { npm config set proxy $script:OriginalNpmProxy | Out-Null } else { npm config delete proxy | Out-Null }
@@ -299,20 +313,11 @@ function Apply-PackageMirrors {
 }
 
 function Invoke-WithoutProxy([scriptblock]$Action) {
-  $saved = @{
-    HTTP_PROXY = $env:HTTP_PROXY
-    HTTPS_PROXY = $env:HTTPS_PROXY
-    ALL_PROXY = $env:ALL_PROXY
-    http_proxy = $env:http_proxy
-    https_proxy = $env:https_proxy
-    all_proxy = $env:all_proxy
-    PIP_PROXY = $env:PIP_PROXY
-  }
-  foreach ($key in $saved.Keys) { Remove-Item "Env:$key" -ErrorAction SilentlyContinue }
+  $names = @("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy", "PIP_PROXY")
+  $saved = @(Save-EnvironmentVariables $names)
+  foreach ($key in $names) { Remove-Item "Env:$key" -ErrorAction SilentlyContinue }
   try { & $Action } finally {
-    foreach ($key in $saved.Keys) {
-      if ([string]::IsNullOrEmpty($saved[$key])) { Remove-Item "Env:$key" -ErrorAction SilentlyContinue } else { Set-Item "Env:$key" $saved[$key] }
-    }
+    Restore-EnvironmentVariables $saved
   }
 }
 
