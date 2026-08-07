@@ -583,12 +583,39 @@ function Graceful-Exit {
   exit 0
 }
 
+function Ensure-Utf8Bom([string]$Path) {
+  if (-not (Test-Path $Path)) { return }
+  $bytes = [System.IO.File]::ReadAllBytes($Path)
+  if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
+    return
+  }
+  $bom = [byte[]](0xEF, 0xBB, 0xBF)
+  $combined = New-Object -TypeName "System.Byte[]" -ArgumentList ($bom.Length + $bytes.Length)
+  [Array]::Copy($bom, 0, $combined, 0, $bom.Length)
+  [Array]::Copy($bytes, 0, $combined, $bom.Length, $bytes.Length)
+  [System.IO.File]::WriteAllBytes($Path, $combined)
+}
+
+function Copy-ScriptForElevation([string]$SourcePath, [string]$TargetPath) {
+  Copy-Item -Path $SourcePath -Destination $TargetPath -Force
+  Ensure-Utf8Bom $TargetPath
+}
+
 function Get-CurrentScriptPathForElevation {
-  if ($PSCommandPath -and (Test-Path $PSCommandPath)) { return $PSCommandPath }
-  if ($MyInvocation.MyCommand.Path -and (Test-Path $MyInvocation.MyCommand.Path)) { return $MyInvocation.MyCommand.Path }
   $tmpScript = Join-Path $env:TEMP "AgentDock-install-elevated.ps1"
-  Say "当前脚本来自远程管道，将保存到临时文件用于管理员运行：$tmpScript"
+  if ($PSCommandPath -and (Test-Path $PSCommandPath)) {
+    Say "将当前脚本复制为 UTF-8 BOM 临时文件用于管理员运行：$tmpScript"
+    Copy-ScriptForElevation $PSCommandPath $tmpScript
+    return $tmpScript
+  }
+  if ($MyInvocation.MyCommand.Path -and (Test-Path $MyInvocation.MyCommand.Path)) {
+    Say "将当前脚本复制为 UTF-8 BOM 临时文件用于管理员运行：$tmpScript"
+    Copy-ScriptForElevation $MyInvocation.MyCommand.Path $tmpScript
+    return $tmpScript
+  }
+  Say "当前脚本来自远程管道，将保存为 UTF-8 BOM 临时文件用于管理员运行：$tmpScript"
   Invoke-WebDownload "https://raw.githubusercontent.com/CozeBoy/AgentDock/main/install.ps1?ts=$([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())" $tmpScript
+  Ensure-Utf8Bom $tmpScript
   return $tmpScript
 }
 

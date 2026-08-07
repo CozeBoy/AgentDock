@@ -109,6 +109,13 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1 -Check
 powershell -ExecutionPolicy Bypass -File .\install.ps1 -Yes
 ```
 
+不要直接运行 `.\install.ps1`：很多 Windows 默认执行策略会拦截本地 `.ps1` 文件并提示 `PSSecurityException`。上面的 `-ExecutionPolicy Bypass` 只对这次命令生效，不会永久修改系统策略。也可以在当前窗口临时执行：
+
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+.\install.ps1
+```
+
 如果要带参数，建议先下载再运行：
 
 ```powershell
