@@ -722,6 +722,20 @@ function Confirm-Reconfigure([string]$Prompt) {
   return $false
 }
 
+function Choose-ExistingHermesGatewayAction {
+  Write-Host "已检测到飞书 / Lark 通道配置。请选择后续动作：" -ForegroundColor Cyan
+  Say "  1) 启动 / 查看 Hermes Gateway 服务（推荐，不重新配置飞书）"
+  Say "  2) 打开 Hermes 通道配置向导（手动补充或重配设置）"
+  Say "  3) 跳过"
+  $ans = Read-Host "输入序号 [默认 1]"
+  if ($ans -match '^[qQ]$') { Graceful-Exit }
+  switch ($ans) {
+    "2" { return "setup" }
+    "3" { return "skip" }
+    default { return "start" }
+  }
+}
+
 function Keep-TerminalOpen {
   if ($Yes) { return }
   if ($env:AGENTDOCK_ELEVATED_WINDOW -eq "1") {
@@ -1564,8 +1578,16 @@ function Configure-HermesAgent {
   }
   $feishuConfigured = Test-HermesFeishuGatewayConfigured
   if ($feishuConfigured) {
-    Ok "Hermes 飞书 / Lark 通道已配置，默认不重新配置。"
-    if (-not (Confirm-Reconfigure "重新配置 Hermes 飞书 / Lark 通道")) { return }
+    Ok "Hermes 飞书 / Lark 通道已配置。"
+    $gatewayAction = Choose-ExistingHermesGatewayAction
+    if ($gatewayAction -eq "skip") { return }
+    if ($gatewayAction -eq "start") {
+      Show-HermesGatewayServiceGuide
+      try { Invoke-Hermes @("gateway", "status") } catch {}
+      try { Invoke-Hermes @("gateway", "start") } catch { Warn "Hermes Gateway 启动失败：$($_.Exception.Message)" }
+      try { Invoke-Hermes @("gateway", "status") } catch {}
+      return
+    }
   } elseif (-not (Confirm-Step "配置 Hermes 飞书 / Lark 通道")) {
     return
   }
@@ -1596,7 +1618,14 @@ function Show-HermesGatewayGuide {
   Say "  How should direct messages be authorized：私聊权限；新手可选 DM pairing approval，更开放可选 Allow all direct messages。"
   Say "  How should group chats be handled：群聊响应方式；推荐 Respond only when @mentioned。"
   Say "  Home chat ID：通知/定时任务默认发送到哪个会话；不确定可直接回车留空。"
-  Say "  Done：配置完 Feishu / Lark 后选择 Done 退出平台选择。"
+  Say "  Done / 28：配置完 Feishu / Lark 后选择 Done 退出平台选择。"
+  Say "提示：如果看到 Feishu / Lark is already configured，只有确实要重建配置才输入 y；直接回车会回到平台菜单，然后选 28 Done 退出。"
+}
+
+function Show-HermesGatewayServiceGuide {
+  Step "Hermes Gateway 服务"
+  Say "飞书通道已经配置时，通常只需要启动 Gateway 服务，不需要重新配置 Feishu / Lark。"
+  Say "脚本将执行：hermes gateway status，然后 hermes gateway start。"
 }
 
 function Get-HermesConfigPath {

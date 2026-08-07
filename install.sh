@@ -517,6 +517,26 @@ confirm_reconfigure(){
   esac
 }
 
+choose_existing_hermes_gateway_action(){
+  local ans
+  say "${CYN}已检测到飞书 / Lark 通道配置。请选择后续动作：${RST}"
+  say "  1) 启动 / 查看 Hermes Gateway 服务（推荐，不重新配置飞书）"
+  say "  2) 打开 Hermes 通道配置向导（手动补充或重配设置）"
+  say "  3) 跳过"
+  printf "${CYN}输入序号 [默认 1]：${RST}"
+  if [ -r /dev/tty ]; then
+    IFS= read -r ans </dev/tty 2>/dev/null || ans=""
+  else
+    ans=""
+  fi
+  case "$ans" in
+    q|Q) graceful_exit ;;
+    2) printf '%s\n' "setup" ;;
+    3) printf '%s\n' "skip" ;;
+    *) printf '%s\n' "start" ;;
+  esac
+}
+
 keep_terminal_open(){
   [ "$ASSUME_YES" = "1" ] && return
   [ -t 0 ] || [ -r /dev/tty ] || return
@@ -1125,7 +1145,7 @@ install_hermes(){
 }
 
 configure_hermes_agent(){
-  local hermes_model
+  local hermes_model gateway_action
   step "Hermes Agent 配置"
   has_cmd hermes || { warn "Hermes 未安装，跳过配置"; return; }
   [ "$CHECK_ONLY" = "1" ] && return
@@ -1147,8 +1167,18 @@ configure_hermes_agent(){
     hermes model
   fi
   if hermes_feishu_gateway_configured; then
-    ok "Hermes 飞书 / Lark 通道已配置，默认不重新配置。"
-    confirm_reconfigure "重新配置 Hermes 飞书 / Lark 通道" || return
+    ok "Hermes 飞书 / Lark 通道已配置。"
+    gateway_action="$(choose_existing_hermes_gateway_action)"
+    case "$gateway_action" in
+      skip) return ;;
+      start)
+        show_hermes_gateway_service_guide
+        hermes gateway status || true
+        hermes gateway start || warn "Hermes Gateway 启动失败"
+        hermes gateway status || true
+        return
+        ;;
+    esac
   else
     confirm "配置 Hermes 飞书 / Lark 通道" || return
   fi
@@ -1179,7 +1209,14 @@ show_hermes_gateway_guide(){
   say "  How should direct messages be authorized：私聊权限；新手可选 DM pairing approval，更开放可选 Allow all direct messages。"
   say "  How should group chats be handled：群聊响应方式；推荐 Respond only when @mentioned。"
   say "  Home chat ID：通知/定时任务默认发送到哪个会话；不确定可直接回车留空。"
-  say "  Done：配置完 Feishu / Lark 后选择 Done 退出平台选择。"
+  say "  Done / 28：配置完 Feishu / Lark 后选择 Done 退出平台选择。"
+  say "提示：如果看到 Feishu / Lark is already configured，只有确实要重建配置才输入 y；直接回车会回到平台菜单，然后选 28 Done 退出。"
+}
+
+show_hermes_gateway_service_guide(){
+  step "Hermes Gateway 服务"
+  say "飞书通道已经配置时，通常只需要启动 Gateway 服务，不需要重新配置 Feishu / Lark。"
+  say "脚本将执行：hermes gateway status，然后 hermes gateway start。"
 }
 
 hermes_config_path(){
