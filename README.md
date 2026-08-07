@@ -78,6 +78,12 @@ macOS 也会维护 PATH：安装模式会写入 Homebrew、`~/.local/bin`、Herm
 curl -fsSL https://raw.githubusercontent.com/CozeBoy/AgentDock/main/install.sh | bash
 ```
 
+如果刚更新过仓库，想强制拉取最新脚本、避免缓存，可以运行：
+
+```bash
+curl -fsSL "https://raw.githubusercontent.com/CozeBoy/AgentDock/main/install.sh?ts=$(date +%s)" | bash
+```
+
 本地测试：
 
 ```bash
@@ -99,6 +105,12 @@ curl -fsSL https://raw.githubusercontent.com/CozeBoy/AgentDock/main/install.sh |
 
 ```powershell
 irm https://raw.githubusercontent.com/CozeBoy/AgentDock/main/install.ps1 | iex
+```
+
+如果刚更新过仓库，想强制拉取最新脚本、避免缓存，可以运行：
+
+```powershell
+irm "https://raw.githubusercontent.com/CozeBoy/AgentDock/main/install.ps1?ts=$(Get-Date -Format yyyyMMddHHmmss)" | iex
 ```
 
 本地测试：
