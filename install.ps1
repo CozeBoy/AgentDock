@@ -359,6 +359,11 @@ function Install-PipUser([string]$PythonCommand, [string[]]$PipArgs) {
     Say "执行：$PythonCommand -m pip install --user $($PipArgs -join ' ')（走代理访问官方 PyPI）"
     $args = @("-m", "pip", "install", "--user", "--index-url", "https://pypi.org/simple") + $PipArgs
     Invoke-PythonCommand $PythonCommand $args
+    if ($LASTEXITCODE -ne 0) {
+      Warn "官方 PyPI 代理安装失败，切换国内镜像重试"
+      $mirrorArgs = @("-m", "pip", "install", "--user", "--index-url", "https://pypi.tuna.tsinghua.edu.cn/simple", "--extra-index-url", "https://mirrors.aliyun.com/pypi/simple", "--extra-index-url", "https://pypi.org/simple") + $PipArgs
+      Invoke-PythonCommand $PythonCommand $mirrorArgs
+    }
     return
   }
   Say "执行：$PythonCommand -m pip install --user $($PipArgs -join ' ')（优先 pip 国内镜像）"
@@ -384,6 +389,35 @@ function Test-PythonCommand([string]$PythonCommand) {
   try {
     Invoke-PythonCommand $PythonCommand @("--version") *> $null
     return ($LASTEXITCODE -eq 0)
+  } catch {
+    return $false
+  }
+}
+
+function Test-PythonHasPip([string]$PythonCommand) {
+  try {
+    Invoke-PythonCommand $PythonCommand @("-m", "pip", "--version") *> $null
+    return ($LASTEXITCODE -eq 0)
+  } catch {
+    return $false
+  }
+}
+
+function Test-PythonExternallyManaged([string]$PythonCommand) {
+  try {
+    $code = "import sysconfig, pathlib; print(pathlib.Path(sysconfig.get_path('stdlib'), 'EXTERNALLY-MANAGED').exists())"
+    $value = Invoke-PythonCommand $PythonCommand @("-c", $code) 2>$null | Select-Object -First 1
+    return ($value -eq "True")
+  } catch {
+    return $false
+  }
+}
+
+function Test-PythonVirtualEnv([string]$PythonCommand) {
+  try {
+    $code = "import sys; print(sys.prefix != sys.base_prefix)"
+    $value = Invoke-PythonCommand $PythonCommand @("-c", $code) 2>$null | Select-Object -First 1
+    return ($value -eq "True")
   } catch {
     return $false
   }
@@ -417,19 +451,22 @@ function Get-PythonTargets {
     } catch {}
   }
 
-  foreach ($root in @("$env:LOCALAPPDATA\hermes", "$env:USERPROFILE\.hermes", "$env:LOCALAPPDATA\uv\python", "$env:APPDATA\uv\python")) {
-    if (-not $root -or -not (Test-Path $root)) { continue }
-    try {
-      Get-ChildItem -Path $root -Filter "python.exe" -File -Recurse -ErrorAction SilentlyContinue | ForEach-Object {
-        $raw.Add($_.FullName)
-      }
-    } catch {}
-  }
-
   $seen = @{}
   foreach ($candidate in $raw) {
     if (-not $candidate) { continue }
     if (-not (Test-PythonCommand $candidate)) { continue }
+    if (-not (Test-PythonHasPip $candidate)) {
+      Warn "跳过 Python（未安装 pip）：$candidate"
+      continue
+    }
+    if (Test-PythonVirtualEnv $candidate) {
+      Warn "跳过 Python venv 环境：$candidate"
+      continue
+    }
+    if (Test-PythonExternallyManaged $candidate) {
+      Warn "跳过 uv/系统托管 Python（externally managed）：$candidate"
+      continue
+    }
     $identity = Get-PythonIdentity $candidate
     if (-not $identity -or $seen.ContainsKey($identity)) { continue }
     $seen[$identity] = $true
@@ -960,22 +997,6 @@ function Get-Python311Command {
   )
   foreach ($candidate in $candidates) {
     if (Test-Path $candidate) { return $candidate }
-  }
-  foreach ($root in @("$env:LOCALAPPDATA\hermes", "$env:USERPROFILE\.hermes", "$env:LOCALAPPDATA\uv\python", "$env:APPDATA\uv\python")) {
-    if (-not $root -or -not (Test-Path $root)) { continue }
-    try {
-      $match = Get-ChildItem -Path $root -Filter "python.exe" -File -Recurse -ErrorAction SilentlyContinue |
-        Where-Object {
-          try {
-            $version = (& $_.FullName -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>$null)
-            $version -eq "3.11"
-          } catch {
-            $false
-          }
-        } |
-        Select-Object -First 1
-      if ($match) { return $match.FullName }
-    } catch {}
   }
   if (HasCommand "python") {
     try {

@@ -277,6 +277,10 @@ pip_install_user(){
   if [ -n "$PROXY_URL" ]; then
     say "${DIM}执行：$py -m pip install --user $*（走代理访问官方 PyPI）${RST}"
     "$py" -m pip install --user --index-url "https://pypi.org/simple" "$@"
+    if [ "$?" != "0" ]; then
+      warn "官方 PyPI 代理安装失败，切换国内镜像重试"
+      "$py" -m pip install --user --index-url "https://pypi.tuna.tsinghua.edu.cn/simple" --extra-index-url "https://mirrors.aliyun.com/pypi/simple" --extra-index-url "https://pypi.org/simple" "$@"
+    fi
     return
   fi
   say "${DIM}执行：$py -m pip install --user $*（优先 pip 国内镜像）${RST}"
@@ -750,20 +754,48 @@ print(f"{sys.version_info.major}.{sys.version_info.minor}:{sys.executable}")
 PY
 }
 
+python_has_pip(){
+  "$1" -m pip --version >/dev/null 2>&1
+}
+
+python_is_venv(){
+  [ "$("$1" - <<'PY' 2>/dev/null
+import sys
+print(sys.prefix != sys.base_prefix)
+PY
+)" = "True" ]
+}
+
+python_is_externally_managed(){
+  [ "$("$1" - <<'PY' 2>/dev/null
+import pathlib, sysconfig
+print(pathlib.Path(sysconfig.get_path("stdlib"), "EXTERNALLY-MANAGED").exists())
+PY
+)" = "True" ]
+}
+
 list_python_targets(){
   local candidate key seen=""
   for candidate in \
     "$(python311_cmd 2>/dev/null)" \
     "python3.11" \
     "python3" \
-    "python" \
-    "$HOME/.local/share/uv/python"/*/bin/python3.11 \
-    "$HOME/.cache/uv/python"/*/bin/python3.11 \
-    "$HOME/.hermes"/*/bin/python3.11 \
-    "$HOME/Library/Application Support/uv/python"/*/bin/python3.11
+    "python"
   do
     [ -n "$candidate" ] || continue
     if [ -x "$candidate" ] || command -v "$candidate" >/dev/null 2>&1; then
+      if ! python_has_pip "$candidate"; then
+        warn "跳过 Python（未安装 pip）：$candidate"
+        continue
+      fi
+      if python_is_venv "$candidate"; then
+        warn "跳过 Python venv 环境：$candidate"
+        continue
+      fi
+      if python_is_externally_managed "$candidate"; then
+        warn "跳过 uv/系统托管 Python（externally managed）：$candidate"
+        continue
+      fi
       key="$(python_version_key "$candidate")"
       [ -n "$key" ] || continue
       case "|$seen|" in *"|$key|"*) continue ;; esac
