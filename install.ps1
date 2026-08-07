@@ -385,6 +385,14 @@ function Get-PythonIdentity([string]$PythonCommand) {
   return $null
 }
 
+function Get-PythonExecutablePath([string]$PythonCommand) {
+  try {
+    $result = Invoke-PythonCommand $PythonCommand @("-c", "import sys; print(sys.executable)") 2>$null
+    if ($LASTEXITCODE -eq 0 -and $result) { return ($result | Select-Object -First 1) }
+  } catch {}
+  return $null
+}
+
 function Test-PythonCommand([string]$PythonCommand) {
   try {
     Invoke-PythonCommand $PythonCommand @("--version") *> $null
@@ -392,6 +400,18 @@ function Test-PythonCommand([string]$PythonCommand) {
   } catch {
     return $false
   }
+}
+
+function Test-StandalonePython([string]$PythonCommand) {
+  $exe = Get-PythonExecutablePath $PythonCommand
+  if (-not $exe) { return $false }
+  $lower = $exe.ToLowerInvariant()
+  if ($lower -like "*\hermes\*" -or $lower -like "*\.hermes\*" -or $lower -like "*\uv\python\*" -or $lower -like "*\uv\cache\*") {
+    return $false
+  }
+  if (Test-PythonVirtualEnv $PythonCommand) { return $false }
+  if (Test-PythonExternallyManaged $PythonCommand) { return $false }
+  return $true
 }
 
 function Test-PythonHasPip([string]$PythonCommand) {
@@ -455,16 +475,12 @@ function Get-PythonTargets {
   foreach ($candidate in $raw) {
     if (-not $candidate) { continue }
     if (-not (Test-PythonCommand $candidate)) { continue }
+    if (-not (Test-StandalonePython $candidate)) {
+      Warn "跳过 Hermes/uv/venv 托管 Python：$candidate"
+      continue
+    }
     if (-not (Test-PythonHasPip $candidate)) {
       Warn "跳过 Python（未安装 pip）：$candidate"
-      continue
-    }
-    if (Test-PythonVirtualEnv $candidate) {
-      Warn "跳过 Python venv 环境：$candidate"
-      continue
-    }
-    if (Test-PythonExternallyManaged $candidate) {
-      Warn "跳过 uv/系统托管 Python（externally managed）：$candidate"
       continue
     }
     $identity = Get-PythonIdentity $candidate
@@ -561,6 +577,10 @@ function Confirm-Step([string]$Prompt) {
 
 function Keep-TerminalOpen {
   if ($Yes) { return }
+  if ($env:AGENTDOCK_ELEVATED_WINDOW -eq "1") {
+    Write-Host "脚本已结束，管理员窗口将保持打开。输入 exit 后再退出。" -ForegroundColor DarkGray
+    return
+  }
   Write-Host "脚本已结束，终端将保持打开。输入 exit 后再退出。" -ForegroundColor DarkGray
   if (Get-Command pwsh -ErrorAction SilentlyContinue) {
     pwsh -NoExit
@@ -580,18 +600,20 @@ function Get-CurrentScriptPathForElevation {
   if ($MyInvocation.MyCommand.Path -and (Test-Path $MyInvocation.MyCommand.Path)) { return $MyInvocation.MyCommand.Path }
   $tmpScript = Join-Path $env:TEMP "AgentDock-install-elevated.ps1"
   Say "当前脚本来自远程管道，将保存到临时文件用于管理员运行：$tmpScript"
-  Invoke-WebDownload "https://raw.githubusercontent.com/CozeBoy/AgentDock/main/install.ps1" $tmpScript
+  Invoke-WebDownload "https://raw.githubusercontent.com/CozeBoy/AgentDock/main/install.ps1?ts=$([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())" $tmpScript
   return $tmpScript
 }
 
 function Build-ElevationArguments([string]$ScriptPath) {
-  $parts = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$ScriptPath`"")
-  if ($Check) { $parts += "-Check" }
-  if ($Yes) { $parts += "-Yes" }
-  if ($NoProxy) { $parts += "-NoProxy" }
-  if ($ProxyUrl) { $parts += @("-Proxy", "`"$ProxyUrl`"") }
-  if ($WhisperModel) { $parts += @("-WhisperModel", "`"$WhisperModel`"") }
-  return ($parts -join " ")
+  $scriptArgs = @()
+  if ($Check) { $scriptArgs += "-Check" }
+  if ($Yes) { $scriptArgs += "-Yes" }
+  if ($NoProxy) { $scriptArgs += "-NoProxy" }
+  if ($ProxyUrl) { $scriptArgs += @("-Proxy", "'$($ProxyUrl.Replace("'", "''"))'") }
+  if ($WhisperModel) { $scriptArgs += @("-WhisperModel", "'$($WhisperModel.Replace("'", "''"))'") }
+  $quotedScript = $ScriptPath.Replace("'", "''")
+  $command = "`$env:AGENTDOCK_ELEVATION_ATTEMPTED='1'; `$env:AGENTDOCK_ELEVATED_WINDOW='1'; & '$quotedScript' $($scriptArgs -join ' '); Write-Host ''; Write-Host 'AgentDock 管理员窗口已结束，输入 exit 后再关闭。' -ForegroundColor DarkGray"
+  return @("-NoProfile", "-ExecutionPolicy", "Bypass", "-NoExit", "-Command", $command)
 }
 
 function Suggest-Elevation {
@@ -973,7 +995,7 @@ function Ensure-Python {
 function Ensure-Python311 {
   $python311 = Get-Python311Command
   if ($python311) {
-    Ok "Python 3.11 已安装：$(Get-Python311Version $python311)"
+    Ok "Python 3.11 已安装：$(Get-PythonCommandDisplay $python311)"
     return $true
   }
   if ($Check) { Warn "Python 3.11 未安装"; return $false }
@@ -988,7 +1010,7 @@ function Get-Python311Command {
   if (HasCommand "py") {
     try {
       py -3.11 --version *> $null
-      if ($LASTEXITCODE -eq 0) { return "py -3.11" }
+      if ($LASTEXITCODE -eq 0 -and (Test-StandalonePython "py -3.11")) { return "py -3.11" }
     } catch {}
   }
   $candidates = @(
@@ -996,15 +1018,22 @@ function Get-Python311Command {
     "$env:LOCALAPPDATA\Programs\Python\Python311\python.exe"
   )
   foreach ($candidate in $candidates) {
-    if (Test-Path $candidate) { return $candidate }
+    if ((Test-Path $candidate) -and (Test-StandalonePython $candidate)) { return $candidate }
   }
   if (HasCommand "python") {
     try {
       $version = (& python -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>$null)
-      if ($version -eq "3.11") { return "python" }
+      if ($version -eq "3.11" -and (Test-StandalonePython "python")) { return "python" }
     } catch {}
   }
   return $null
+}
+
+function Get-PythonCommandDisplay([string]$Command) {
+  $version = Get-Python311Version $Command
+  $exe = Get-PythonExecutablePath $Command
+  if ($exe) { return "$version ($exe)" }
+  return $version
 }
 
 function Get-Python311Version([string]$Command) {
@@ -1414,7 +1443,7 @@ function Check-All {
   if (HasCommand "nvm") { Ok "nvm：已检测到" } else { Warn "nvm：未检测到" }
   if (HasCommand "node") { Ok "Node.js：$(node -v)" } else { Warn "Node.js：未安装" }
   $python311 = Get-Python311Command
-  if ($python311) { Ok "Python 3.11：$(Get-Python311Version $python311)" } else { Warn "Python 3.11：未安装" }
+  if ($python311) { Ok "Python 3.11：$(Get-PythonCommandDisplay $python311)" } else { Warn "Python 3.11：未安装" }
   if (HasCommand "ffmpeg") { Ok "ffmpeg：已安装" } else { Warn "ffmpeg：未安装" }
   if (HasCommand "yt-dlp") { Ok "yt-dlp：$(yt-dlp --version | Select-Object -First 1)" } else { Warn "yt-dlp：未安装" }
   if (HasCommand "rg") { Ok "ripgrep：$(rg --version | Select-Object -First 1)" } else { Warn "ripgrep：未安装" }
@@ -1429,6 +1458,7 @@ function Check-All {
 Prepare-ConsoleOutput
 Show-Intro
 Suggest-Elevation
+Refresh-ProcessPath
 Write-Host "------------------------------------------------------------"
 Write-Host "Agent 航海环境部署工具 (Windows)"
 Write-Host "------------------------------------------------------------"
