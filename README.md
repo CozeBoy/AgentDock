@@ -46,7 +46,11 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1
 
 终端支持彩色启动动画。涉及下载时会优先显示系统自带下载进度条或安装器输出，避免长时间看起来没有进展；如果要关闭颜色动效，可以设置 `NO_COLOR=1`。
 
-交互确认默认等待 15 秒；没有输入会自动继续，输入 `s` 跳过当前步骤，输入 `q` 退出并保留终端窗口。
+交互确认不会自动安装：按回车继续，输入 `s` 跳过当前步骤，输入 `q` 退出并保留终端窗口。如果某个环境已经安装但脚本没有检测到，建议输入 `s` 跳过。
+
+Windows 安装 Node.js、Python、ffmpeg、npm 全局命令和 Python Scripts 后，会写入当前用户 PATH，并立即刷新当前脚本进程的环境变量；新开的 PowerShell 也会继承这些路径。
+
+macOS 也会维护 PATH：安装模式会写入 Homebrew、`~/.local/bin`、Hermes、npm 全局命令、Python user bin 等常见目录到 `.zshrc`、`.zprofile`、`.bash_profile`、`.bashrc`，并立即刷新当前脚本进程。nvm 会写入初始化脚本，不会把某个固定 Node 版本目录写死到 PATH；`--check` 检测模式不会修改配置文件。
 
 安装顺序会先处理依赖环境，再安装上层工具：
 
@@ -126,7 +130,8 @@ Windows:
 - Hermes Agent：官方安装脚本 `https://hermes-agent.nousresearch.com/install.sh` / `install.ps1`
 - Codex CLI：官方安装脚本 `https://chatgpt.com/codex/install.sh` / `install.ps1`
 - ChatGPT / Codex Desktop：macOS 检查 `/Applications/ChatGPT.app` 和 `/Applications/Codex.app`；Windows 检查 Appx 包、WindowsApps 下的 `OpenAI.Codex_*\\app\\ChatGPT.exe`、常见本地安装目录
-- Node.js：macOS 会先加载已有 nvm，再优先 Homebrew，否则使用 nvm；Windows 会先加载常见 nvm-windows 路径，否则使用 winget 安装 LTS 版
+- Node.js：macOS 会先加载已有 nvm，再优先 Homebrew，否则使用 nvm；Windows 会先加载常见 nvm-windows 路径，否则下载官方 Node.js LTS zip 到用户目录
 - 飞书 CLI：npm 包 `@larksuite/cli`
-- Python 3：macOS 优先 Homebrew；Windows 使用 winget
+- Python 3：macOS 优先 Homebrew；Windows 下载 python.org 官方安装器并执行用户静默安装
+- ffmpeg：macOS 使用 Homebrew；Windows 下载 gyan.dev 官方 zip 并解压到用户目录
 - Whisper：Python 包 `openai-whisper`，模型支持 `fast/turbo`、`normal/base`、`tiny`、`small`、`medium`、`large`

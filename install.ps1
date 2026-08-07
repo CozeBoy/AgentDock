@@ -127,41 +127,11 @@ if ($ProxyUrl) {
 function Confirm-Step([string]$Prompt) {
   if ($Yes) { return $true }
   Write-Host "等待确认：$Prompt" -ForegroundColor Yellow
-  Write-Host "请按回车继续，输入 s 跳过，输入 q 退出。15 秒无输入将自动继续：" -NoNewline -ForegroundColor Cyan
-  $ans = Read-HostWithTimeout 15
-  if ([string]::IsNullOrWhiteSpace($ans)) {
-    Write-Host "未收到输入，自动继续。" -ForegroundColor DarkGray
-  }
+  $ans = Read-Host "请按回车继续；如果你确认已安装但未检测到，输入 s 跳过；输入 q 退出"
   if ($ans -match '^[qQ]$') { Graceful-Exit }
   if ($ans -match '^[sS]$') { return $false }
   Write-Host "已确认，开始处理：$Prompt" -ForegroundColor Green
   return $true
-}
-
-function Read-HostWithTimeout([int]$TimeoutSeconds) {
-  $buffer = ""
-  $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
-  while ((Get-Date) -lt $deadline) {
-    if ([Console]::KeyAvailable) {
-      $key = [Console]::ReadKey($true)
-      if ($key.Key -eq "Enter") {
-        Write-Host ""
-        return $buffer
-      }
-      if ($key.Key -eq "Backspace") {
-        if ($buffer.Length -gt 0) {
-          $buffer = $buffer.Substring(0, $buffer.Length - 1)
-          Write-Host -NoNewline "`b `b"
-        }
-        continue
-      }
-      $buffer += $key.KeyChar
-      Write-Host -NoNewline $key.KeyChar
-    }
-    Start-Sleep -Milliseconds 100
-  }
-  Write-Host ""
-  return $buffer
 }
 
 function Keep-TerminalOpen {
@@ -296,17 +266,34 @@ function Download-WithFallback([string]$Url, [string]$OutFile) {
 
 function Add-UserPath([string]$Dir) {
   if (-not (Test-Path $Dir)) { return }
+  $fullDir = [IO.Path]::GetFullPath($Dir).TrimEnd("\")
   $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
-  if ($userPath -notlike "*$Dir*") {
-    [Environment]::SetEnvironmentVariable("Path", "$Dir;$userPath", "User")
+  $parts = @()
+  if ($userPath) {
+    $parts = $userPath -split ";" | Where-Object { $_ -and $_.Trim() }
   }
-  if ($env:Path -notlike "*$Dir*") { $env:Path = "$Dir;$env:Path" }
+  $exists = $false
+  foreach ($part in $parts) {
+    try {
+      if ([IO.Path]::GetFullPath($part).TrimEnd("\").Equals($fullDir, [StringComparison]::OrdinalIgnoreCase)) {
+        $exists = $true
+        break
+      }
+    } catch {}
+  }
+  if (-not $exists) {
+    [Environment]::SetEnvironmentVariable("Path", "$fullDir;$userPath", "User")
+    Ok "已写入用户 PATH：$fullDir"
+  } else {
+    Ok "用户 PATH 已包含：$fullDir"
+  }
+  Refresh-ProcessPath
 }
 
-function Ensure-Winget {
-  if (HasCommand "winget") { return $true }
-  Warn "未检测到 winget，部分依赖无法自动安装。请从 Microsoft Store 更新 App Installer。"
-  return $false
+function Refresh-ProcessPath {
+  $machinePath = [Environment]::GetEnvironmentVariable("Path", "Machine")
+  $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+  $env:Path = "$machinePath;$userPath"
 }
 
 function Ensure-Node {
@@ -320,16 +307,42 @@ function Ensure-Node {
   if (HasCommand "nvm") {
     Use-NvmInstalledNode | Out-Null
     if (-not ((HasCommand "node") -and (HasCommand "npm"))) {
-      Warn "检测到 nvm，但没有可直接启用的 Node.js 版本，将使用 winget 安装 Node.js LTS"
+      Warn "检测到 nvm，但没有可直接启用的 Node.js 版本，将下载 Node.js 官方 zip"
     }
   }
-  if (-not ((HasCommand "node") -and (HasCommand "npm")) -and (Ensure-Winget)) {
-    Say "执行：winget install --id OpenJS.NodeJS.LTS"
-    Say "winget 正在启动，第一次运行可能需要几十秒..."
-    winget install --id OpenJS.NodeJS.LTS -e --accept-package-agreements --accept-source-agreements
-    $env:Path = [Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [Environment]::GetEnvironmentVariable("Path", "User")
+  if (-not ((HasCommand "node") -and (HasCommand "npm"))) {
+    Install-NodeFromOfficialZip
   }
   return ((HasCommand "node") -and (HasCommand "npm"))
+}
+
+function Get-WindowsArchName {
+  if ([Environment]::Is64BitOperatingSystem -and $env:PROCESSOR_ARCHITECTURE -match "ARM64") { return "arm64" }
+  return "x64"
+}
+
+function Install-NodeFromOfficialZip {
+  $arch = Get-WindowsArchName
+  $indexFile = Join-Path $env:TEMP "node-index.json"
+  Say "获取 Node.js 官方版本索引..."
+  Invoke-WebDownload "https://nodejs.org/dist/index.json" $indexFile
+  $versions = Get-Content $indexFile -Raw | ConvertFrom-Json
+  $assetName = "win-$arch-zip"
+  $release = $versions | Where-Object { $_.lts -and ($_.files -contains $assetName) } | Select-Object -First 1
+  if (-not $release) { throw "未找到适合 Windows $arch 的 Node.js LTS zip 包" }
+  $version = $release.version
+  $zipUrl = "https://nodejs.org/dist/$version/node-$version-win-$arch.zip"
+  $zipFile = Join-Path $env:TEMP "node-$version-win-$arch.zip"
+  $targetRoot = Join-Path $env:LOCALAPPDATA "Programs\nodejs"
+  $targetDir = Join-Path $targetRoot "node-$version-win-$arch"
+  Say "准备安装 Node.js $version 到：$targetDir"
+  Invoke-WebDownload $zipUrl $zipFile
+  Remove-Item $targetDir -Recurse -Force -ErrorAction SilentlyContinue
+  New-Item -ItemType Directory -Force -Path $targetRoot | Out-Null
+  Say "解压 Node.js..."
+  Expand-Archive -Path $zipFile -DestinationPath $targetRoot -Force
+  Add-UserPath $targetDir
+  Ok "Node.js 已安装到用户目录：$targetDir"
 }
 
 function Use-NvmInstalledNode {
@@ -340,7 +353,7 @@ function Use-NvmInstalledNode {
     } | Where-Object { $_ } | Select-Object -First 1)
     if ($versions) {
       nvm use $versions | Out-Null
-      $env:Path = [Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [Environment]::GetEnvironmentVariable("Path", "User")
+      Refresh-ProcessPath
       return $true
     }
   } catch {}
@@ -372,27 +385,74 @@ function Load-NvmIfPresent {
 function Ensure-Python {
   if (HasCommand "python") { Ok "Python 已安装"; return $true }
   if ($Check) { Warn "Python 未安装"; return $false }
-  if (-not (Confirm-Step "安装 Python 3.11（Whisper 需要）")) { return $false }
-  if (Ensure-Winget) {
-    Say "执行：winget install --id Python.Python.3.11"
-    Say "winget 正在启动，第一次运行可能需要几十秒..."
-    winget install --id Python.Python.3.11 -e --accept-package-agreements --accept-source-agreements
-    $env:Path = [Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [Environment]::GetEnvironmentVariable("Path", "User")
-  }
+  if (-not (Confirm-Step "安装 Python 3（Whisper 需要）")) { return $false }
+  Install-PythonFromOfficialInstaller
   return (HasCommand "python")
+}
+
+function Get-PythonInstallerUrl {
+  $pageFile = Join-Path $env:TEMP "python-windows.html"
+  Invoke-WebDownload "https://www.python.org/downloads/windows/" $pageFile
+  $html = Get-Content $pageFile -Raw
+  $archSuffix = if ((Get-WindowsArchName) -eq "arm64") { "arm64" } else { "amd64" }
+  $pattern = "https://www\.python\.org/ftp/python/(\d+\.\d+\.\d+)/python-\1-$archSuffix\.exe"
+  $matches = [regex]::Matches($html, $pattern)
+  if ($matches.Count -gt 0) { return $matches[0].Value }
+  if ($archSuffix -eq "amd64") {
+    return "https://www.python.org/ftp/python/3.12.10/python-3.12.10-amd64.exe"
+  }
+  throw "未找到适合当前系统的 Python 安装包"
+}
+
+function Install-PythonFromOfficialInstaller {
+  $installerUrl = Get-PythonInstallerUrl
+  $installer = Join-Path $env:TEMP ([IO.Path]::GetFileName($installerUrl))
+  Say "准备下载 Python 官方安装器：$installerUrl"
+  Invoke-WebDownload $installerUrl $installer
+  Say "执行：Python 用户静默安装（包含 pip，并写入用户 PATH）"
+  $process = Start-Process -FilePath $installer -ArgumentList "/quiet InstallAllUsers=0 PrependPath=1 Include_pip=1 Include_launcher=1 SimpleInstall=1" -Wait -PassThru
+  if ($process.ExitCode -ne 0) { throw "Python 安装失败，退出码：$($process.ExitCode)" }
+  Register-PythonPaths
+  Refresh-ProcessPath
+}
+
+function Register-PythonPaths {
+  $candidateRoots = @(
+    "$env:LOCALAPPDATA\Programs\Python",
+    "$env:APPDATA\Python"
+  ) | Where-Object { $_ -and (Test-Path $_) }
+  foreach ($root in $candidateRoots) {
+    Get-ChildItem -Path $root -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+      if (Test-Path (Join-Path $_.FullName "python.exe")) { Add-UserPath $_.FullName }
+      $scripts = Join-Path $_.FullName "Scripts"
+      if (Test-Path $scripts) { Add-UserPath $scripts }
+    }
+  }
 }
 
 function Ensure-Ffmpeg {
   if (HasCommand "ffmpeg") { Ok "ffmpeg 已安装"; return $true }
   if ($Check) { Warn "ffmpeg 未安装"; return $false }
   if (-not (Confirm-Step "安装 ffmpeg（Whisper 处理音频需要）")) { return $false }
-  if (Ensure-Winget) {
-    Say "执行：winget install --id Gyan.FFmpeg"
-    Say "winget 正在启动，第一次运行可能需要几十秒..."
-    winget install --id Gyan.FFmpeg -e --accept-package-agreements --accept-source-agreements
-    $env:Path = [Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [Environment]::GetEnvironmentVariable("Path", "User")
-  }
+  Install-FfmpegFromOfficialZip
   return (HasCommand "ffmpeg")
+}
+
+function Install-FfmpegFromOfficialZip {
+  $zipUrl = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
+  $zipFile = Join-Path $env:TEMP "ffmpeg-release-essentials.zip"
+  $targetRoot = Join-Path $env:LOCALAPPDATA "Programs\ffmpeg"
+  Say "准备下载 ffmpeg 官方构建：$zipUrl"
+  Invoke-WebDownload $zipUrl $zipFile
+  Remove-Item $targetRoot -Recurse -Force -ErrorAction SilentlyContinue
+  New-Item -ItemType Directory -Force -Path $targetRoot | Out-Null
+  Say "解压 ffmpeg..."
+  Expand-Archive -Path $zipFile -DestinationPath $targetRoot -Force
+  $ffmpegExe = Get-ChildItem -Path $targetRoot -Filter "ffmpeg.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+  if (-not $ffmpegExe) { throw "ffmpeg 解压后未找到 ffmpeg.exe" }
+  $binDir = $ffmpegExe.Directory.FullName
+  Add-UserPath $binDir
+  Ok "ffmpeg 已安装到用户目录：$binDir"
 }
 
 function Install-Hermes {
@@ -492,7 +552,17 @@ function Install-LarkCli {
     npm config set https-proxy $ProxyUrl | Out-Null
   }
   npm install -g @larksuite/cli
+  Register-NpmGlobalPath
   try { lark-cli update | Out-Null } catch {}
+}
+
+function Register-NpmGlobalPath {
+  try {
+    $npmPrefix = (npm config get prefix 2>$null).Trim()
+    if ($npmPrefix -and (Test-Path $npmPrefix)) { Add-UserPath $npmPrefix }
+  } catch {}
+  $npmRoaming = Join-Path $env:APPDATA "npm"
+  if (Test-Path $npmRoaming) { Add-UserPath $npmRoaming }
 }
 
 function Install-Python {
@@ -518,6 +588,7 @@ function Install-Whisper {
   }
   $pythonUserBase = (python -m site --user-base 2>$null)
   if ($pythonUserBase) { Add-UserPath (Join-Path $pythonUserBase "Scripts") }
+  Refresh-ProcessPath
   $model = Choose-WhisperModel
   Download-WhisperModel $model
 }
@@ -526,16 +597,16 @@ function Check-All {
   Step "环境检测"
   Load-NvmIfPresent | Out-Null
   Say "系统：Windows $([Environment]::OSVersion.Version)"
+  if (HasCommand "nvm") { Ok "nvm：已检测到" } else { Warn "nvm：未检测到" }
+  if (HasCommand "node") { Ok "Node.js：$(node -v)" } else { Warn "Node.js：未安装" }
+  if (HasCommand "python") { Ok "Python：$(python --version)" } else { Warn "Python：未安装" }
   if (HasCommand "hermes") { Ok "Hermes：$(hermes --version | Select-Object -First 1)" } else { Warn "Hermes：未安装" }
   if (HasCommand "codex") { Ok "Codex CLI：$(codex --version | Select-Object -First 1)" } else { Warn "Codex CLI：未安装" }
   $desktop = Get-CodexDesktopInstall
   if ($desktop) { Ok "ChatGPT / Codex Desktop：$desktop" } else { Warn "ChatGPT / Codex Desktop：未检测到" }
   if (HasCommand "lark-cli") { Ok "lark-cli：$(lark-cli --version | Select-Object -First 1)" } else { Warn "lark-cli：未安装" }
-  if (HasCommand "whisper") { Ok "Whisper：已安装" } else { Warn "Whisper：未安装" }
-  if (HasCommand "python") { Ok "Python：$(python --version)" } else { Warn "Python：未安装" }
-  if (HasCommand "node") { Ok "Node.js：$(node -v)" } else { Warn "Node.js：未安装" }
-  if (HasCommand "nvm") { Ok "nvm：已检测到" } else { Warn "nvm：未检测到" }
   if (HasCommand "ffmpeg") { Ok "ffmpeg：已安装" } else { Warn "ffmpeg：未安装" }
+  if (HasCommand "whisper") { Ok "Whisper：已安装" } else { Warn "Whisper：未安装" }
 }
 
 Show-Intro

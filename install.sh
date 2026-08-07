@@ -231,13 +231,12 @@ confirm(){
   local prompt="$1"
   [ "$ASSUME_YES" = "1" ] && return 0
   say "${YLW}等待确认：$prompt${RST}"
-  printf "${CYN}请按回车继续，输入 s 跳过，输入 q 退出。15 秒无输入将自动继续：${RST}"
+  printf "${CYN}请按回车继续；如果你确认已安装但未检测到，输入 s 跳过；输入 q 退出：${RST}"
   if [ -r /dev/tty ]; then
-    IFS= read -r -t 15 ans </dev/tty 2>/dev/null || ans=""
+    IFS= read -r ans </dev/tty 2>/dev/null || ans=""
   else
     ans=""
   fi
-  [ -z "$ans" ] && say "${DIM}未收到输入，自动继续。${RST}"
   case "$ans" in
     q|Q) graceful_exit ;;
     s|S) return 1 ;;
@@ -325,11 +324,57 @@ PY
 add_path_once(){
   local dir="$1" marker="$2" rc line
   [ -d "$dir" ] || return
+  dir="$(cd "$dir" 2>/dev/null && pwd -P)"
   case ":$PATH:" in *":$dir:"*) ;; *) export PATH="$dir:$PATH" ;; esac
+  [ "$CHECK_ONLY" = "1" ] && return
   line="export PATH=\"$dir:\$PATH\" # Agent 航海环境部署工具：$marker"
-  for rc in "$HOME/.zshrc" "$HOME/.bash_profile"; do
+  for rc in "$HOME/.zshrc" "$HOME/.zprofile" "$HOME/.bash_profile" "$HOME/.bashrc"; do
     [ -e "$rc" ] || touch "$rc" 2>/dev/null
-    grep -qF "$dir" "$rc" 2>/dev/null || printf '\n%s\n' "$line" >> "$rc"
+    if grep -qF "$dir" "$rc" 2>/dev/null; then
+      ok "PATH 已包含：$dir"
+    else
+      printf '\n%s\n' "$line" >> "$rc"
+      ok "已写入 PATH：$dir -> $rc"
+    fi
+  done
+}
+
+refresh_common_paths(){
+  [ -d "/opt/homebrew/bin" ] && add_path_once "/opt/homebrew/bin" "Homebrew"
+  [ -d "/usr/local/bin" ] && add_path_once "/usr/local/bin" "Homebrew"
+  [ -d "$HOME/.local/bin" ] && add_path_once "$HOME/.local/bin" "用户命令"
+  [ -d "$HOME/.hermes/bin" ] && add_path_once "$HOME/.hermes/bin" "Hermes"
+  ensure_nvm_shell_init
+  if has_cmd python3; then
+    local python_user_bin
+    python_user_bin="$(python3 -m site --user-base 2>/dev/null)/bin"
+    [ -d "$python_user_bin" ] && add_path_once "$python_user_bin" "Python 用户命令"
+  fi
+  if has_cmd npm; then
+    local npm_prefix npm_bin
+    npm_prefix="$(npm prefix -g 2>/dev/null || npm config get prefix 2>/dev/null)"
+    case "$npm_prefix" in
+      "$HOME/.nvm"/*) return ;;
+    esac
+    npm_bin="$npm_prefix/bin"
+    [ -d "$npm_bin" ] && add_path_once "$npm_bin" "npm 全局命令"
+  fi
+}
+
+ensure_nvm_shell_init(){
+  local nvm_dir rc
+  [ "$CHECK_ONLY" = "1" ] && return
+  nvm_dir="${NVM_DIR:-$HOME/.nvm}"
+  [ -s "$nvm_dir/nvm.sh" ] || return
+  for rc in "$HOME/.zshrc" "$HOME/.zprofile" "$HOME/.bash_profile" "$HOME/.bashrc"; do
+    [ -e "$rc" ] || touch "$rc" 2>/dev/null
+    if ! grep -q 'Agent 航海环境部署工具：nvm' "$rc" 2>/dev/null; then
+      {
+        printf '\nexport NVM_DIR="%s" # Agent 航海环境部署工具：nvm\n' "$nvm_dir"
+        printf '[ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" # Agent 航海环境部署工具：nvm\n'
+      } >> "$rc"
+      ok "已写入 nvm 初始化：$rc"
+    fi
   done
 }
 
@@ -365,6 +410,7 @@ ensure_homebrew(){
       add_path_once "/usr/local/bin" "Homebrew"
     fi
   fi
+  refresh_common_paths
   has_cmd brew && ok "Homebrew 安装完成：$(brew --version 2>/dev/null | head -1)"
 }
 
@@ -398,6 +444,7 @@ ensure_node(){
       nvm use --lts
     fi
   fi
+  refresh_common_paths
   has_cmd node && has_cmd npm && ok "Node.js 安装完成：$(node -v 2>/dev/null)"
 }
 
@@ -457,6 +504,7 @@ ensure_python(){
     warn "未检测到 Homebrew，无法自动安装 Python；请稍后手动安装或先安装 Homebrew"
     return 1
   fi
+  refresh_common_paths
 }
 
 ensure_ffmpeg(){
@@ -470,6 +518,7 @@ ensure_ffmpeg(){
     warn "未检测到 Homebrew，无法自动安装 ffmpeg；请稍后手动安装或先安装 Homebrew"
     return 1
   fi
+  refresh_common_paths
 }
 
 install_hermes(){
@@ -481,6 +530,7 @@ install_hermes(){
     bash "$TMPDIR/hermes-install.sh"
   add_path_once "$HOME/.local/bin" "Hermes"
   add_path_once "$HOME/.hermes/bin" "Hermes"
+  refresh_common_paths
 }
 
 install_codex_cli(){
@@ -491,6 +541,7 @@ install_codex_cli(){
   curl_download "https://chatgpt.com/codex/install.sh" "$TMPDIR/codex-install.sh" &&
     CODEX_INSTALLER_USE_RELEASES_OPENAI_COM=false sh "$TMPDIR/codex-install.sh"
   add_path_once "$HOME/.local/bin" "Codex CLI"
+  refresh_common_paths
 }
 
 install_codex_desktop(){
@@ -551,6 +602,7 @@ install_lark_cli(){
   local npm_bin
   npm_bin="$(npm prefix -g 2>/dev/null)/bin"
   add_path_once "$npm_bin" "npm 全局命令"
+  refresh_common_paths
   has_cmd lark-cli && lark-cli update >/dev/null 2>&1
 }
 
@@ -580,6 +632,7 @@ install_whisper(){
   local python_user_bin
   python_user_bin="$(python3 -m site --user-base 2>/dev/null)/bin"
   add_path_once "$python_user_bin" "Python 用户命令"
+  refresh_common_paths
   choose_whisper_model
   download_whisper_model "$WHISPER_MODEL"
 }
@@ -588,17 +641,17 @@ check_all(){
   step "环境检测"
   load_nvm_if_present
   say "系统：$(sw_vers -productVersion 2>/dev/null) / $(uname -m)"
+  has_cmd brew && ok "Homebrew：$(brew --version 2>/dev/null | head -1)" || warn "Homebrew：未安装"
+  xcode-select -p >/dev/null 2>&1 && ok "Xcode Command Line Tools：已安装" || warn "Xcode Command Line Tools：未安装"
+  has_cmd nvm && ok "nvm：已检测到" || warn "nvm：未检测到"
+  has_cmd node && ok "Node.js：$(node -v 2>/dev/null)" || warn "Node.js：未安装"
+  has_cmd python3 && ok "Python：$(python3 --version 2>/dev/null)" || warn "Python：未安装"
   has_cmd hermes && ok "Hermes：$(hermes --version 2>/dev/null | head -1)" || warn "Hermes：未安装"
   has_cmd codex && ok "Codex CLI：$(codex --version 2>/dev/null | head -1)" || warn "Codex CLI：未安装"
   detect_codex_desktop >/dev/null 2>&1 && ok "ChatGPT / Codex Desktop：$(detect_codex_desktop)" || warn "ChatGPT / Codex Desktop：未检测到"
   has_cmd lark-cli && ok "lark-cli：$(lark-cli --version 2>/dev/null | head -1)" || warn "lark-cli：未安装"
-  has_cmd whisper || python3 -m whisper --help >/dev/null 2>&1 && ok "Whisper：已安装" || warn "Whisper：未安装"
-  has_cmd python3 && ok "Python：$(python3 --version 2>/dev/null)" || warn "Python：未安装"
-  has_cmd node && ok "Node.js：$(node -v 2>/dev/null)" || warn "Node.js：未安装"
-  has_cmd nvm && ok "nvm：已检测到" || warn "nvm：未检测到"
-  has_cmd brew && ok "Homebrew：$(brew --version 2>/dev/null | head -1)" || warn "Homebrew：未安装"
-  xcode-select -p >/dev/null 2>&1 && ok "Xcode Command Line Tools：已安装" || warn "Xcode Command Line Tools：未安装"
   has_cmd ffmpeg && ok "ffmpeg：已安装" || warn "ffmpeg：未安装"
+  has_cmd whisper || python3 -m whisper --help >/dev/null 2>&1 && ok "Whisper：已安装" || warn "Whisper：未安装"
 }
 
 main(){
@@ -608,6 +661,7 @@ main(){
   hr
   choose_proxy
   apply_proxy_env
+  refresh_common_paths
   check_all
   [ "$CHECK_ONLY" = "1" ] && graceful_exit
   install_xcode_tools
