@@ -67,6 +67,21 @@ function Warn($Text) { Write-Host "WARN $Text" -ForegroundColor Yellow }
 function Fail($Text) { Write-Host "ERR $Text" -ForegroundColor Red }
 function Step($Text) { Write-Host ""; Write-Host "==> $Text" -ForegroundColor Cyan }
 function HasCommand($Name) { [bool](Get-Command $Name -ErrorAction SilentlyContinue) }
+function Get-NpmCommand {
+  $cmd = Get-Command "npm.cmd" -ErrorAction SilentlyContinue
+  if ($cmd) { return $cmd.Source }
+  $cmd = Get-Command "npm.exe" -ErrorAction SilentlyContinue
+  if ($cmd) { return $cmd.Source }
+  $cmd = Get-Command "npm" -CommandType Application -ErrorAction SilentlyContinue
+  if ($cmd) { return $cmd.Source }
+  return $null
+}
+function HasNpm { return [bool](Get-NpmCommand) }
+function Invoke-Npm([string[]]$Arguments) {
+  $npm = Get-NpmCommand
+  if (-not $npm) { throw "npm 不可用" }
+  & $npm @Arguments
+}
 function EffectsEnabled { return (-not $env:NO_COLOR) }
 
 function Enable-AnsiConsole {
@@ -229,12 +244,12 @@ function Restore-ProxyEnvironment {
   if ($script:ProxyEnvApplied) {
     Restore-EnvironmentVariables $script:OriginalProxyEnv
   }
-  if ($script:NpmProxyChanged -and (HasCommand "npm")) {
-    if ($script:OriginalNpmProxy) { npm config set proxy $script:OriginalNpmProxy | Out-Null } else { npm config delete proxy | Out-Null }
-    if ($script:OriginalNpmHttpsProxy) { npm config set https-proxy $script:OriginalNpmHttpsProxy | Out-Null } else { npm config delete https-proxy | Out-Null }
+  if ($script:NpmProxyChanged -and (HasNpm)) {
+    if ($script:OriginalNpmProxy) { Invoke-Npm @("config", "set", "proxy", $script:OriginalNpmProxy) | Out-Null } else { Invoke-Npm @("config", "delete", "proxy") | Out-Null }
+    if ($script:OriginalNpmHttpsProxy) { Invoke-Npm @("config", "set", "https-proxy", $script:OriginalNpmHttpsProxy) | Out-Null } else { Invoke-Npm @("config", "delete", "https-proxy") | Out-Null }
   }
-  if ($script:NpmRegistryChanged -and (HasCommand "npm")) {
-    if ($script:OriginalNpmRegistry) { npm config set registry $script:OriginalNpmRegistry | Out-Null } else { npm config delete registry | Out-Null }
+  if ($script:NpmRegistryChanged -and (HasNpm)) {
+    if ($script:OriginalNpmRegistry) { Invoke-Npm @("config", "set", "registry", $script:OriginalNpmRegistry) | Out-Null } else { Invoke-Npm @("config", "delete", "registry") | Out-Null }
   }
   Restore-GitHttpsRewrite
   if ($script:ProxyEnvApplied -or $script:PackageMirrorsApplied -or $script:NpmProxyChanged -or $script:NpmRegistryChanged -or $script:GitHttpsRewriteApplied) {
@@ -249,34 +264,34 @@ function Restore-ProxyEnvironment {
 
 function Apply-NpmProxy {
   if (-not $ProxyUrl) { return }
-  if (-not (HasCommand "npm")) { return }
+  if (-not (HasNpm)) { return }
   if (-not $script:NpmProxyChanged) {
-    $script:OriginalNpmProxy = (npm config get proxy 2>$null)
+    $script:OriginalNpmProxy = (Invoke-Npm @("config", "get", "proxy") 2>$null)
     if ($script:OriginalNpmProxy -eq "null") { $script:OriginalNpmProxy = $null }
-    $script:OriginalNpmHttpsProxy = (npm config get https-proxy 2>$null)
+    $script:OriginalNpmHttpsProxy = (Invoke-Npm @("config", "get", "https-proxy") 2>$null)
     if ($script:OriginalNpmHttpsProxy -eq "null") { $script:OriginalNpmHttpsProxy = $null }
   }
-  npm config set proxy $ProxyUrl | Out-Null
-  npm config set https-proxy $ProxyUrl | Out-Null
-  npm config set fetch-timeout 600000 | Out-Null
-  npm config set fetch-retries 5 | Out-Null
+  Invoke-Npm @("config", "set", "proxy", $ProxyUrl) | Out-Null
+  Invoke-Npm @("config", "set", "https-proxy", $ProxyUrl) | Out-Null
+  Invoke-Npm @("config", "set", "fetch-timeout", "600000") | Out-Null
+  Invoke-Npm @("config", "set", "fetch-retries", "5") | Out-Null
   $script:NpmProxyChanged = $true
   Ok "已临时设置 npm 代理：$ProxyUrl"
 }
 
 function Set-NpmRegistryTemporary([string]$Registry) {
-  if (-not (HasCommand "npm")) { return }
+  if (-not (HasNpm)) { return }
   if (-not $script:NpmRegistryChanged) {
-    $script:OriginalNpmRegistry = (npm config get registry 2>$null)
+    $script:OriginalNpmRegistry = (Invoke-Npm @("config", "get", "registry") 2>$null)
     if ($script:OriginalNpmRegistry -eq "undefined") { $script:OriginalNpmRegistry = $null }
   }
-  npm config set registry $Registry | Out-Null
+  Invoke-Npm @("config", "set", "registry", $Registry) | Out-Null
   $script:NpmRegistryChanged = $true
 }
 
 function Apply-PackageMirrors {
   if ($script:PackageMirrorsApplied) {
-    if (HasCommand "npm") {
+    if (HasNpm) {
       if ($ProxyUrl) {
         Set-NpmRegistryTemporary "https://registry.npmjs.org/"
       } else {
@@ -293,7 +308,7 @@ function Apply-PackageMirrors {
     Remove-Item Env:UV_INDEX_URL -ErrorAction SilentlyContinue
     $script:PackageMirrorsApplied = $true
     Ok "已临时设置 pip / uv 使用官方源，网络全部走代理"
-    if (HasCommand "npm") {
+    if (HasNpm) {
       Set-NpmRegistryTemporary "https://registry.npmjs.org/"
       Ok "已临时设置 npm registry：https://registry.npmjs.org/"
     }
@@ -306,7 +321,7 @@ function Apply-PackageMirrors {
   $env:UV_INDEX_URL = $env:PIP_INDEX_URL
   $script:PackageMirrorsApplied = $true
   Ok "已临时设置 pip / uv 国内镜像，官方源作为兜底"
-  if (HasCommand "npm") {
+  if (HasNpm) {
     Set-NpmRegistryTemporary "https://registry.npmmirror.com"
     Ok "已临时设置 npm registry：https://registry.npmmirror.com"
   }
@@ -326,16 +341,16 @@ function Install-NpmGlobal([string]$PackageName) {
     Apply-NpmProxy
     Set-NpmRegistryTemporary "https://registry.npmjs.org/"
     Say "执行：npm install -g $PackageName（走代理访问官方 npm registry）"
-    npm install -g $PackageName
+    Invoke-Npm @("install", "-g", $PackageName)
     return
   }
   Set-NpmRegistryTemporary "https://registry.npmmirror.com"
   Say "执行：npm install -g $PackageName（优先 npm 国内镜像）"
-  Invoke-WithoutProxy { npm install -g $PackageName }
+  Invoke-WithoutProxy { Invoke-Npm @("install", "-g", $PackageName) }
   if ($LASTEXITCODE -ne 0) {
     Warn "npm 国内镜像安装失败，切换官方源直连重试：$PackageName"
     Set-NpmRegistryTemporary "https://registry.npmjs.org/"
-    npm install -g $PackageName
+    Invoke-Npm @("install", "-g", $PackageName)
   }
 }
 
@@ -824,7 +839,7 @@ function Test-IsAdministrator {
 
 function Ensure-Node {
   Load-NvmIfPresent | Out-Null
-  if ((HasCommand "node") -and (HasCommand "npm")) {
+  if ((HasCommand "node") -and (HasNpm)) {
     Ok "Node.js 已安装：$(node -v)"
     return $true
   }
@@ -832,14 +847,14 @@ function Ensure-Node {
   if (-not (Confirm-Step "安装 Node.js LTS（飞书 CLI 需要 npm）")) { return $false }
   if (HasCommand "nvm") {
     Use-NvmInstalledNode | Out-Null
-    if (-not ((HasCommand "node") -and (HasCommand "npm"))) {
+    if (-not ((HasCommand "node") -and (HasNpm))) {
       Warn "检测到 nvm，但没有可直接启用的 Node.js 版本，将下载 Node.js 官方 zip"
     }
   }
-  if (-not ((HasCommand "node") -and (HasCommand "npm"))) {
+  if (-not ((HasCommand "node") -and (HasNpm))) {
     Install-NodeFromOfficialZip
   }
-  return ((HasCommand "node") -and (HasCommand "npm"))
+  return ((HasCommand "node") -and (HasNpm))
 }
 
 function Get-WindowsArchName {
@@ -945,6 +960,22 @@ function Get-Python311Command {
   )
   foreach ($candidate in $candidates) {
     if (Test-Path $candidate) { return $candidate }
+  }
+  foreach ($root in @("$env:LOCALAPPDATA\hermes", "$env:USERPROFILE\.hermes", "$env:LOCALAPPDATA\uv\python", "$env:APPDATA\uv\python")) {
+    if (-not $root -or -not (Test-Path $root)) { continue }
+    try {
+      $match = Get-ChildItem -Path $root -Filter "python.exe" -File -Recurse -ErrorAction SilentlyContinue |
+        Where-Object {
+          try {
+            $version = (& $_.FullName -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>$null)
+            $version -eq "3.11"
+          } catch {
+            $false
+          }
+        } |
+        Select-Object -First 1
+      if ($match) { return $match.FullName }
+    } catch {}
   }
   if (HasCommand "python") {
     try {
@@ -1271,14 +1302,14 @@ function Register-NpmGlobalPath {
     Join-Path $env:APPDATA "npm"
   }
   New-Item -ItemType Directory -Force -Path $globalPrefix | Out-Null
-  npm config set prefix $globalPrefix | Out-Null
+  Invoke-Npm @("config", "set", "prefix", $globalPrefix) | Out-Null
   if (Test-IsAdministrator) {
     Add-MachinePath $globalPrefix
   } else {
     Add-UserPath $globalPrefix
   }
   try {
-    $npmPrefix = (npm config get prefix 2>$null).Trim()
+    $npmPrefix = (Invoke-Npm @("config", "get", "prefix") 2>$null).Trim()
     if ($npmPrefix -and (Test-Path $npmPrefix)) {
       if (Test-IsAdministrator -and $npmPrefix.StartsWith($env:ProgramFiles, [StringComparison]::OrdinalIgnoreCase)) {
         Add-MachinePath $npmPrefix
