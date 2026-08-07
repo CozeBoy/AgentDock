@@ -67,6 +67,21 @@ function Warn($Text) { Write-Host "WARN $Text" -ForegroundColor Yellow }
 function Fail($Text) { Write-Host "ERR $Text" -ForegroundColor Red }
 function Step($Text) { Write-Host ""; Write-Host "==> $Text" -ForegroundColor Cyan }
 function HasCommand($Name) { [bool](Get-Command $Name -ErrorAction SilentlyContinue) }
+function Get-CommandSource($Name) {
+  $cmd = Get-Command $Name -ErrorAction SilentlyContinue
+  if ($cmd) { return $cmd.Source }
+  return $null
+}
+function Test-TransientToolPath([string]$Path) {
+  if (-not $Path) { return $false }
+  $lower = $Path.ToLowerInvariant()
+  return ($lower -like "*\hermes\*" -or $lower -like "*\.hermes\*" -or $lower -like "*\uv\cache\*" -or $lower -like "*\.cache\uv\*")
+}
+function HasGlobalTool($Name) {
+  $source = Get-CommandSource $Name
+  if (-not $source) { return $false }
+  return (-not (Test-TransientToolPath $source))
+}
 function Get-NpmCommand {
   $cmd = Get-Command "npm.cmd" -ErrorAction SilentlyContinue
   if ($cmd) { return $cmd.Source }
@@ -364,6 +379,23 @@ function Install-PipUser([string]$PythonCommand, [string[]]$PipArgs) {
   }
 }
 
+function Install-UvTool([string]$PackageName, [string]$CommandName) {
+  if (-not (HasCommand "uv")) { return $false }
+  $userBin = Join-Path $env:USERPROFILE ".local\bin"
+  New-Item -ItemType Directory -Force -Path $userBin | Out-Null
+  Add-UserPath $userBin
+  if ($ProxyUrl) {
+    Say "执行：uv tool install $PackageName（走代理访问官方 PyPI，创建用户级命令入口）"
+    & uv tool install $PackageName
+  } else {
+    Say "执行：uv tool install $PackageName（优先 uv / pip 镜像，创建用户级命令入口）"
+    Invoke-WithoutProxy { & uv tool install $PackageName }
+    if ($LASTEXITCODE -ne 0) { & uv tool install $PackageName }
+  }
+  Refresh-ProcessPath
+  return (HasGlobalTool $CommandName)
+}
+
 function Get-PythonIdentity([string]$PythonCommand) {
   try {
     $code = "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}:{sys.executable}')"
@@ -496,12 +528,13 @@ function Get-PythonUserScripts([string]$PythonCommand) {
 
 function Install-PythonModuleAll([string]$PackageName, [string]$Label) {
   $installed = $false
+  $mainPython = Get-MainPythonCommand
+  if ($mainPython) { Say "主 Python 优先：$(Get-PythonCommandDisplay $mainPython)" }
   foreach ($python in (Get-PythonTargets)) {
     Say "为 Python 安装 $Label 模块：$python"
     Install-PipUser $python @("--upgrade", $PackageName)
     if ($LASTEXITCODE -eq 0) { $installed = $true }
   }
-  $mainPython = Get-MainPythonCommand
   if ($mainPython) {
     $scripts = Get-PythonUserScripts $mainPython
     if ($scripts -and (Test-Path $scripts)) { Add-UserPath $scripts }
@@ -510,11 +543,21 @@ function Install-PythonModuleAll([string]$PackageName, [string]$Label) {
 }
 
 function Install-YtDlpModules {
-  return (Install-PythonModuleAll "yt-dlp" "yt-dlp")
+  $installed = Install-PythonModuleAll "yt-dlp" "yt-dlp"
+  if (-not (HasGlobalTool "yt-dlp")) {
+    Warn "pip 安装后仍未检测到全局 yt-dlp 命令，尝试 uv tool install 兜底"
+    $installed = (Install-UvTool "yt-dlp" "yt-dlp") -or $installed
+  }
+  return $installed
 }
 
 function Install-WhisperModules {
-  return (Install-PythonModuleAll "openai-whisper" "Whisper")
+  $installed = Install-PythonModuleAll "openai-whisper" "Whisper"
+  if (-not (HasGlobalTool "whisper")) {
+    Warn "pip 安装后仍未检测到全局 whisper 命令，尝试 uv tool install 兜底"
+    $installed = (Install-UvTool "openai-whisper" "whisper") -or $installed
+  }
+  return $installed
 }
 
 function Enable-GitHttpsRewrite {
@@ -1137,24 +1180,26 @@ function Ensure-Ffmpeg {
 }
 
 function Ensure-YtDlp {
-  if (HasCommand "yt-dlp") {
+  if (HasGlobalTool "yt-dlp") {
     Ok "yt-dlp 命令已安装：$(yt-dlp --version | Select-Object -First 1)"
+  } elseif (HasCommand "yt-dlp") {
+    Warn "检测到 yt-dlp 位于临时 / Hermes / uv cache 路径，仍会安装全局入口：$(Get-CommandSource 'yt-dlp')"
   } elseif ($Check) {
     Warn "yt-dlp 未安装"
     return $false
   }
   if ($Check) { return $true }
-  if (-not (Confirm-Step "为可用 Python 安装 / 更新 yt-dlp 模块（保留主 Python 命令入口）")) { return $false }
+  if (-not (Confirm-Step "为主 Python / 可用 Python 安装或更新 yt-dlp 模块，并保留命令入口兜底")) { return $false }
   $script:YtDlpModulesRequested = $true
   Ensure-Python | Out-Null
   Install-YtDlpModules | Out-Null
   Register-PythonPaths
   Refresh-ProcessPath
-  if (-not (HasCommand "yt-dlp")) {
-    Warn "pip 安装后仍未检测到 yt-dlp 命令，改用官方 exe 兜底安装"
+  if (-not (HasGlobalTool "yt-dlp")) {
+    Warn "仍未检测到全局 yt-dlp 命令，改用官方 exe 兜底安装"
     Install-YtDlpFromGithubExe
   }
-  return (HasCommand "yt-dlp")
+  return (HasGlobalTool "yt-dlp")
 }
 
 function Ensure-Ripgrep {
@@ -1438,8 +1483,11 @@ function Install-Ripgrep {
 
 function Install-Whisper {
   Step "Whisper"
-  $whisperInstalled = HasCommand "whisper"
+  $whisperInstalled = HasGlobalTool "whisper"
   if ($whisperInstalled) { Ok "Whisper 已安装" }
+  if ((-not $whisperInstalled) -and (HasCommand "whisper")) {
+    Warn "检测到 whisper 位于临时 / Hermes / uv cache 路径，仍会安装全局入口：$(Get-CommandSource 'whisper')"
+  }
   if ($Check -and -not $whisperInstalled) { Warn "Whisper 未安装"; return }
   if ($Check) { return }
   Ensure-Python | Out-Null
@@ -1469,14 +1517,14 @@ function Check-All {
   $python3 = Get-Python3Command
   if ($python3) { Ok "Python 3：$(Get-PythonCommandDisplay $python3)" } else { Warn "Python 3：未安装" }
   if (HasCommand "ffmpeg") { Ok "ffmpeg：已安装" } else { Warn "ffmpeg：未安装" }
-  if (HasCommand "yt-dlp") { Ok "yt-dlp：$(yt-dlp --version | Select-Object -First 1)" } else { Warn "yt-dlp：未安装" }
+  if (HasGlobalTool "yt-dlp") { Ok "yt-dlp：$(yt-dlp --version | Select-Object -First 1)" } else { Warn "yt-dlp：未安装全局入口" }
   if (HasCommand "rg") { Ok "ripgrep：$(rg --version | Select-Object -First 1)" } else { Warn "ripgrep：未安装" }
   if (HasCommand "hermes") { Ok "Hermes：$(hermes --version | Select-Object -First 1)" } else { Warn "Hermes：未安装" }
   if (HasCommand "codex") { Ok "Codex CLI：$(codex --version | Select-Object -First 1)" } else { Warn "Codex CLI：未安装" }
   $desktop = Get-CodexDesktopInstall
   if ($desktop) { Ok "ChatGPT / Codex Desktop：$desktop" } else { Warn "ChatGPT / Codex Desktop：未检测到" }
   if (HasCommand "lark-cli") { Ok "lark-cli：$(lark-cli --version | Select-Object -First 1)" } else { Warn "lark-cli：未安装" }
-  if (HasCommand "whisper") { Ok "Whisper：已安装" } else { Warn "Whisper：未安装" }
+  if (HasGlobalTool "whisper") { Ok "Whisper：已安装" } else { Warn "Whisper：未安装全局入口" }
 }
 
 Prepare-ConsoleOutput

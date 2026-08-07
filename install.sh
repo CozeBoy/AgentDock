@@ -21,6 +21,28 @@ hr(){ printf '%s\n' "-----------------------------------------------------------
 has_cmd(){ command -v "$1" >/dev/null 2>&1; }
 effects_enabled(){ [ -t 1 ] && [ "${NO_COLOR:-}" = "" ]; }
 
+tool_path(){
+  command -v "$1" 2>/dev/null || true
+}
+
+is_transient_tool_path(){
+  case "$1" in
+    *"/.cache/uv/"*|*"/.cache/hermes/"*|*"/.hermes/"*|*"/hermes/"*|*"/Library/Caches/uv/"*|*"/Caches/uv/"*)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+has_global_tool(){
+  local path
+  path="$(tool_path "$1")"
+  [ -n "$path" ] || return 1
+  ! is_transient_tool_path "$path"
+}
+
 CHECK_ONLY=0
 ASSUME_YES=0
 PROXY_INPUT=""
@@ -289,6 +311,21 @@ pip_install_user(){
   fi
   warn "pip 国内镜像安装失败，切换官方源直连重试"
   "$py" -m pip install --user --index-url "https://pypi.org/simple" "$@"
+}
+
+uv_tool_install(){
+  local package_name="$1" command_name="$2"
+  has_cmd uv || return 1
+  add_path_once "$HOME/.local/bin" "uv tool"
+  if [ -n "$PROXY_URL" ]; then
+    say "${DIM}执行：uv tool install $package_name（走代理访问官方 PyPI，创建用户级命令入口）${RST}"
+    uv tool install "$package_name"
+  else
+    say "${DIM}执行：uv tool install $package_name（优先 uv / pip 镜像，创建用户级命令入口）${RST}"
+    without_proxy_env uv tool install "$package_name" || uv tool install "$package_name"
+  fi
+  refresh_common_paths
+  has_global_tool "$command_name"
 }
 
 enable_git_https_rewrite(){
@@ -754,7 +791,7 @@ import sys
 print(sys.version_info.major)
 PY
 )"
-      if [ "$major" = "3" ] && ! python_is_venv "$candidate"; then
+      if [ "$major" = "3" ] && ! python_is_venv "$candidate" && ! python_is_transient_runtime "$candidate"; then
         printf '%s\n' "$candidate"
         return 0
       fi
@@ -798,6 +835,16 @@ PY
 )" = "True" ]
 }
 
+python_is_transient_runtime(){
+  local exe
+  exe="$("$1" - <<'PY' 2>/dev/null
+import sys
+print(sys.executable)
+PY
+)"
+  is_transient_tool_path "$exe"
+}
+
 python_is_externally_managed(){
   [ "$("$1" - <<'PY' 2>/dev/null
 import pathlib, sysconfig
@@ -822,6 +869,10 @@ list_python_targets(){
       fi
       if python_is_venv "$candidate"; then
         warn "跳过 Python venv 环境：$candidate"
+        continue
+      fi
+      if python_is_transient_runtime "$candidate"; then
+        warn "跳过 Hermes / uv cache 托管 Python：$candidate"
         continue
       fi
       if python_is_externally_managed "$candidate"; then
@@ -868,10 +919,18 @@ EOF
 
 install_ytdlp_modules(){
   install_python_module_all "yt-dlp" "yt-dlp"
+  if ! has_global_tool yt-dlp; then
+    warn "pip 安装后仍未检测到全局 yt-dlp 命令，改用 uv tool install 兜底"
+    uv_tool_install "yt-dlp" "yt-dlp"
+  fi
 }
 
 install_whisper_modules(){
   install_python_module_all "openai-whisper" "Whisper"
+  if ! has_global_tool whisper; then
+    warn "pip 安装后仍未检测到全局 whisper 命令，改用 uv tool install 兜底"
+    uv_tool_install "openai-whisper" "whisper"
+  fi
 }
 
 ensure_ffmpeg(){
@@ -889,8 +948,10 @@ ensure_ffmpeg(){
 }
 
 ensure_ytdlp(){
-  if has_cmd yt-dlp; then
+  if has_global_tool yt-dlp; then
     ok "yt-dlp 命令已安装：$(yt-dlp --version 2>/dev/null | head -1)"
+  elif has_cmd yt-dlp; then
+    warn "检测到 yt-dlp 位于临时 / Hermes / uv cache 路径，仍会安装全局入口：$(tool_path yt-dlp)"
   elif [ "$CHECK_ONLY" = "1" ]; then
     warn "yt-dlp 未安装"
     return 1
@@ -901,7 +962,7 @@ ensure_ytdlp(){
   ensure_python || return 1
   install_ytdlp_modules
   refresh_common_paths
-  has_cmd yt-dlp && ok "yt-dlp 安装完成：$(yt-dlp --version 2>/dev/null | head -1)"
+  has_global_tool yt-dlp && ok "yt-dlp 安装完成：$(yt-dlp --version 2>/dev/null | head -1)"
 }
 
 install_hermes(){
@@ -1007,9 +1068,11 @@ install_python(){
 install_whisper(){
   step "Whisper"
   local whisper_installed=0
-  if { python3_cmd >/dev/null 2>&1 && "$(python3_cmd)" -m whisper --help >/dev/null 2>&1; } || has_cmd whisper; then
+  if has_global_tool whisper || { python3_cmd >/dev/null 2>&1 && "$(python3_cmd)" -m whisper --help >/dev/null 2>&1; }; then
     ok "Whisper 已安装"
     whisper_installed=1
+  elif has_cmd whisper; then
+    warn "检测到 whisper 位于临时 / Hermes / uv cache 路径，仍会安装全局入口：$(tool_path whisper)"
   fi
   [ "$CHECK_ONLY" = "1" ] && [ "$whisper_installed" = "0" ] && { warn "Whisper 未安装"; return; }
   [ "$CHECK_ONLY" = "1" ] && return
@@ -1040,8 +1103,8 @@ check_all(){
   detect_codex_desktop >/dev/null 2>&1 && ok "ChatGPT / Codex Desktop：$(detect_codex_desktop)" || warn "ChatGPT / Codex Desktop：未检测到"
   has_cmd lark-cli && ok "lark-cli：$(lark-cli --version 2>/dev/null | head -1)" || warn "lark-cli：未安装"
   has_cmd ffmpeg && ok "ffmpeg：已安装" || warn "ffmpeg：未安装"
-  has_cmd yt-dlp && ok "yt-dlp：$(yt-dlp --version 2>/dev/null | head -1)" || warn "yt-dlp：未安装"
-  has_cmd whisper || { python3_cmd >/dev/null 2>&1 && "$(python3_cmd)" -m whisper --help >/dev/null 2>&1; } && ok "Whisper：已安装" || warn "Whisper：未安装"
+  has_global_tool yt-dlp && ok "yt-dlp：$(yt-dlp --version 2>/dev/null | head -1)" || warn "yt-dlp：未安装全局入口"
+  has_global_tool whisper || { python3_cmd >/dev/null 2>&1 && "$(python3_cmd)" -m whisper --help >/dev/null 2>&1; } && ok "Whisper：已安装" || warn "Whisper：未安装全局入口"
 }
 
 main(){

@@ -164,6 +164,6 @@ Windows:
 - 飞书 CLI：npm 包 `@larksuite/cli`
 - Python 3：脚本会接受已有的任意全局 Python 3，例如 Python 3.11 / 3.12 / 3.13 / 3.14；只有完全未检测到 Python 3 时才提示安装。Hermes Agent 如果需要 Python 3.11，会使用自己的隔离运行时，脚本不会把 Hermes 自带 Python 当作全局 Python，也不会加入全局 PATH
 - ffmpeg：macOS 使用 Homebrew；Windows 下载 gyan.dev 官方 zip 并解压到系统/用户目录
-- yt-dlp：优先通过 Python 模块安装（`python -m pip install --user --upgrade yt-dlp`）；会尽量给可写且带 pip 的系统/用户 Python 与主 Python 3 安装模块。Hermes 自带 Python 只服务 Hermes，不会加入全局 PATH，也不会作为 yt-dlp 安装目标。Windows 如果 pip 安装后仍未检测到命令，会下载 GitHub 官方 `yt-dlp.exe` 兜底
+- yt-dlp：优先通过 Python 模块安装（`python -m pip install --user --upgrade yt-dlp`），并且主 Python 会优先处理；如果 pip 没有生成全局命令入口，会用 `uv tool install yt-dlp` 兜底创建用户级入口。Hermes 自带 Python 只服务 Hermes，不会加入全局 PATH，也不会作为 yt-dlp 安装目标；`uvx --from yt-dlp ...` 这类临时运行 / cache 入口不会被视为已全局安装。Windows 如果仍未检测到命令，会下载 GitHub 官方 `yt-dlp.exe` 兜底，这只是命令入口兜底，不替代主 Python 模块安装
 - ripgrep：Windows 会在 Hermes Agent 前预装 ripgrep，避免 Hermes 子安装器再走 winget
-- Whisper：Python 包 `openai-whisper`，会尽量给可写且带 pip 的系统/用户 Python 与主 Python 3 安装模块。Hermes 自带 Python 只服务 Hermes，不会加入全局 PATH，也不会作为 Whisper 安装目标；安装模块后会单独选择是否预下载模型，支持 `fast/turbo`、`normal/base`、`tiny`、`small`、`medium`、`large`、`skip`
+- Whisper：Python 包 `openai-whisper`，会尽量给可写且带 pip 的系统/用户 Python 与主 Python 3 安装模块；如果 pip 没有生成全局 `whisper` 命令入口，会用 `uv tool install openai-whisper` 兜底创建用户级入口。Hermes 自带 Python 只服务 Hermes，不会加入全局 PATH，也不会作为 Whisper 安装目标；`uvx` / Hermes profile cache 中的临时入口不会被视为已全局安装。安装模块后会单独选择是否预下载模型，支持 `fast/turbo`、`normal/base`、`tiny`、`small`、`medium`、`large`、`skip`
