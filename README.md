@@ -46,6 +46,8 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1
 
 终端支持彩色启动动画。涉及下载时会优先显示系统自带下载进度条或安装器输出，避免长时间看起来没有进展；如果要关闭颜色动效，可以设置 `NO_COLOR=1`。
 
+交互确认默认等待 15 秒；没有输入会自动继续，输入 `s` 跳过当前步骤，输入 `q` 退出并保留终端窗口。
+
 安装顺序会先处理依赖环境，再安装上层工具：
 
 1. macOS 基础依赖：Xcode Command Line Tools、Homebrew

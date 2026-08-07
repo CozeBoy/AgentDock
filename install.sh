@@ -230,12 +230,18 @@ EOF
 confirm(){
   local prompt="$1"
   [ "$ASSUME_YES" = "1" ] && return 0
-  printf "${CYN}%s${RST} ${DIM}[回车=继续 / s=跳过 / q=退出]：${RST}" "$prompt"
-  IFS= read -r ans </dev/tty 2>/dev/null
+  say "${YLW}等待确认：$prompt${RST}"
+  printf "${CYN}请按回车继续，输入 s 跳过，输入 q 退出。15 秒无输入将自动继续：${RST}"
+  if [ -r /dev/tty ]; then
+    IFS= read -r -t 15 ans </dev/tty 2>/dev/null || ans=""
+  else
+    ans=""
+  fi
+  [ -z "$ans" ] && say "${DIM}未收到输入，自动继续。${RST}"
   case "$ans" in
     q|Q) graceful_exit ;;
     s|S) return 1 ;;
-    *) return 0 ;;
+    *) ok "已确认，开始处理：$prompt"; return 0 ;;
   esac
 }
 

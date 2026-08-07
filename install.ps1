@@ -7,6 +7,7 @@ param(
 )
 
 $ErrorActionPreference = "Continue"
+$ProgressPreference = "Continue"
 
 function Say($Text) { Write-Host $Text }
 function Ok($Text) { Write-Host "OK $Text" -ForegroundColor Green }
@@ -125,10 +126,42 @@ if ($ProxyUrl) {
 
 function Confirm-Step([string]$Prompt) {
   if ($Yes) { return $true }
-  $ans = Read-Host "$Prompt [回车=继续 / s=跳过 / q=退出]"
+  Write-Host "等待确认：$Prompt" -ForegroundColor Yellow
+  Write-Host "请按回车继续，输入 s 跳过，输入 q 退出。15 秒无输入将自动继续：" -NoNewline -ForegroundColor Cyan
+  $ans = Read-HostWithTimeout 15
+  if ([string]::IsNullOrWhiteSpace($ans)) {
+    Write-Host "未收到输入，自动继续。" -ForegroundColor DarkGray
+  }
   if ($ans -match '^[qQ]$') { Graceful-Exit }
   if ($ans -match '^[sS]$') { return $false }
+  Write-Host "已确认，开始处理：$Prompt" -ForegroundColor Green
   return $true
+}
+
+function Read-HostWithTimeout([int]$TimeoutSeconds) {
+  $buffer = ""
+  $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+  while ((Get-Date) -lt $deadline) {
+    if ([Console]::KeyAvailable) {
+      $key = [Console]::ReadKey($true)
+      if ($key.Key -eq "Enter") {
+        Write-Host ""
+        return $buffer
+      }
+      if ($key.Key -eq "Backspace") {
+        if ($buffer.Length -gt 0) {
+          $buffer = $buffer.Substring(0, $buffer.Length - 1)
+          Write-Host -NoNewline "`b `b"
+        }
+        continue
+      }
+      $buffer += $key.KeyChar
+      Write-Host -NoNewline $key.KeyChar
+    }
+    Start-Sleep -Milliseconds 100
+  }
+  Write-Host ""
+  return $buffer
 }
 
 function Keep-TerminalOpen {
@@ -292,6 +325,7 @@ function Ensure-Node {
   }
   if (-not ((HasCommand "node") -and (HasCommand "npm")) -and (Ensure-Winget)) {
     Say "执行：winget install --id OpenJS.NodeJS.LTS"
+    Say "winget 正在启动，第一次运行可能需要几十秒..."
     winget install --id OpenJS.NodeJS.LTS -e --accept-package-agreements --accept-source-agreements
     $env:Path = [Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [Environment]::GetEnvironmentVariable("Path", "User")
   }
@@ -341,6 +375,7 @@ function Ensure-Python {
   if (-not (Confirm-Step "安装 Python 3.11（Whisper 需要）")) { return $false }
   if (Ensure-Winget) {
     Say "执行：winget install --id Python.Python.3.11"
+    Say "winget 正在启动，第一次运行可能需要几十秒..."
     winget install --id Python.Python.3.11 -e --accept-package-agreements --accept-source-agreements
     $env:Path = [Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [Environment]::GetEnvironmentVariable("Path", "User")
   }
@@ -353,6 +388,7 @@ function Ensure-Ffmpeg {
   if (-not (Confirm-Step "安装 ffmpeg（Whisper 处理音频需要）")) { return $false }
   if (Ensure-Winget) {
     Say "执行：winget install --id Gyan.FFmpeg"
+    Say "winget 正在启动，第一次运行可能需要几十秒..."
     winget install --id Gyan.FFmpeg -e --accept-package-agreements --accept-source-agreements
     $env:Path = [Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [Environment]::GetEnvironmentVariable("Path", "User")
   }
