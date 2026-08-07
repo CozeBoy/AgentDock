@@ -734,10 +734,51 @@ function Normalize-WhisperModel([string]$Value) {
   }
 }
 
+function Get-WhisperCachedModels {
+  $items = New-Object System.Collections.Generic.List[string]
+  $cacheRoots = @(
+    $env:WHISPER_CACHE,
+    $env:HF_HOME,
+    $env:HUGGINGFACE_HUB_CACHE,
+    $env:TRANSFORMERS_CACHE,
+    (Join-Path $env:USERPROFILE ".cache\whisper"),
+    (Join-Path $env:USERPROFILE ".cache\huggingface\hub"),
+    (Join-Path $env:LOCALAPPDATA "huggingface\hub")
+  ) | Where-Object { $_ -and (Test-Path $_) }
+
+  foreach ($root in ($cacheRoots | Select-Object -Unique)) {
+    try {
+      if ($root -like "*\whisper") {
+        Get-ChildItem -Path $root -File -ErrorAction SilentlyContinue |
+          Where-Object { $_.Name -match '^(tiny|base|small|medium|large|turbo)(\..*)?\.pt$|^(tiny|base|small|medium|large|turbo)\.pt$' } |
+          ForEach-Object {
+            $model = $_.BaseName -replace '\..*$', ''
+            $items.Add("$model：$($_.FullName)（$(Format-ByteSize $_.Length)）")
+          }
+      }
+      Get-ChildItem -Path $root -Directory -Recurse -Depth 2 -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -match 'whisper|faster-whisper|mlx.*whisper' } |
+        ForEach-Object { $items.Add("$($_.Name)：$($_.FullName)") }
+    } catch {}
+  }
+  return ($items | Select-Object -Unique)
+}
+
+function Show-WhisperCachedModels {
+  $models = @(Get-WhisperCachedModels)
+  if ($models.Count -eq 0) {
+    Warn "未检测到已缓存的 Whisper 模型"
+    return
+  }
+  Ok "已检测到 Whisper 模型缓存："
+  foreach ($model in $models) { Say "  - $model" }
+}
+
 function Choose-WhisperModel {
   if ($WhisperModel) { return Normalize-WhisperModel $WhisperModel }
   if ($Yes) { return "turbo" }
   Step "Whisper 模型选择"
+  Show-WhisperCachedModels
   Say "选择要预下载的 Whisper 模型："
   Say "  1) fast / turbo：约 1.6GB，809M 参数，速度优先，推荐日常使用"
   Say "  2) normal / base：约 142MB，74M 参数，常规轻量，适合快速试用"

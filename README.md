@@ -81,7 +81,7 @@ curl -fsSL https://raw.githubusercontent.com/CozeBoy/AgentDock/main/install.sh |
 如果刚更新过仓库，想强制拉取最新脚本、避免缓存，可以运行：
 
 ```bash
-curl -fsSL "https://raw.githubusercontent.com/CozeBoy/AgentDock/main/install.sh?ts=$(date +%s)" | bash
+curl -fsSL -H "Cache-Control: no-cache" -H "Pragma: no-cache" "https://raw.githubusercontent.com/CozeBoy/AgentDock/main/install.sh?ts=$(date +%s)" | bash
 ```
 
 本地测试：
@@ -110,7 +110,7 @@ irm https://raw.githubusercontent.com/CozeBoy/AgentDock/main/install.ps1 | iex
 如果刚更新过仓库，想强制拉取最新脚本、避免缓存，可以运行：
 
 ```powershell
-irm "https://raw.githubusercontent.com/CozeBoy/AgentDock/main/install.ps1?ts=$(Get-Date -Format yyyyMMddHHmmss)" | iex
+$u = "https://raw.githubusercontent.com/CozeBoy/AgentDock/main/install.ps1?ts=$([guid]::NewGuid())"; $s = (iwr -UseBasicParsing -Headers @{"Cache-Control"="no-cache"; "Pragma"="no-cache"} $u).Content; if ($s -notmatch "Get-LarkCliCommand") { throw "仍然拿到旧脚本，请稍后重试或关闭代理缓存" }; iex $s
 ```
 
 本地测试：
@@ -164,6 +164,8 @@ Windows:
 | `medium` | `medium` | 约 1.5GB | 769M | 准确率较高，下载和运行都更重 |
 | `large` | `large` | 约 2.9GB | 1.55B | 准确率最高，下载最大，运行最重 |
 | `skip` | 不预下载 | 0 | - | 首次使用 Whisper 时再下载 |
+
+再次运行脚本时，如果 Whisper 已安装，脚本会先检测并展示本机已缓存的模型，然后仍然进入模型选择；可以选择新的模型继续预下载，也可以选择 `skip` 跳过。
 
 ## 安装来源
 

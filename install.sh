@@ -526,6 +526,48 @@ normalize_whisper_model(){
   esac
 }
 
+show_whisper_cached_models(){
+  local roots root found=0 name size
+  roots="
+${WHISPER_CACHE:-}
+${HF_HOME:-}
+${HUGGINGFACE_HUB_CACHE:-}
+${TRANSFORMERS_CACHE:-}
+${XDG_CACHE_HOME:-$HOME/.cache}/whisper
+${XDG_CACHE_HOME:-$HOME/.cache}/huggingface/hub
+$HOME/.cache/whisper
+$HOME/.cache/huggingface/hub
+"
+  while IFS= read -r root; do
+    [ -n "$root" ] && [ -d "$root" ] || continue
+    if [ "$(basename "$root")" = "whisper" ]; then
+      while IFS= read -r file; do
+        [ -n "$file" ] || continue
+        name="$(basename "$file")"
+        name="${name%.pt}"
+        name="${name%%.*}"
+        size="$(du -h "$file" 2>/dev/null | awk '{print $1}')"
+        [ "$found" = "0" ] && ok "已检测到 Whisper 模型缓存："
+        found=1
+        say "  - $name：$file${size:+（$size）}"
+      done <<EOF
+$(find "$root" -maxdepth 1 -type f -name "*.pt" 2>/dev/null | grep -E '/(tiny|base|small|medium|large|turbo)(\..*)?\.pt$' || true)
+EOF
+    fi
+    while IFS= read -r dir; do
+      [ -n "$dir" ] || continue
+      [ "$found" = "0" ] && ok "已检测到 Whisper 模型缓存："
+      found=1
+      say "  - $(basename "$dir")：$dir"
+    done <<EOF
+$(find "$root" -maxdepth 3 -type d 2>/dev/null | grep -Ei 'whisper|faster-whisper|mlx.*whisper' || true)
+EOF
+  done <<EOF
+$roots
+EOF
+  [ "$found" = "1" ] || warn "未检测到已缓存的 Whisper 模型"
+}
+
 choose_whisper_model(){
   if [ -n "$WHISPER_MODEL_INPUT" ]; then
     WHISPER_MODEL="$(normalize_whisper_model "$WHISPER_MODEL_INPUT")"
@@ -537,6 +579,7 @@ choose_whisper_model(){
   fi
 
   step "Whisper 模型选择"
+  show_whisper_cached_models
   say "选择要预下载的 Whisper 模型："
   say "  1) fast / turbo：约 1.6GB，809M 参数，速度优先，推荐日常使用"
   say "  2) normal / base：约 142MB，74M 参数，常规轻量，适合快速试用"
