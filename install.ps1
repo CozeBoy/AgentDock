@@ -115,17 +115,25 @@ function Invoke-LarkCli([string[]]$Arguments) {
 function Get-LarkAuthStatus {
   if (-not (HasLarkCli)) { return $null }
   try {
-    $raw = Invoke-LarkCli @("auth", "status") 2>$null | Out-String
+    $raw = Invoke-LarkCli @("auth", "status") 2>&1 | Out-String
     if ([string]::IsNullOrWhiteSpace($raw)) { return $null }
     return ($raw | ConvertFrom-Json)
   } catch {
     return $null
   }
 }
+function Test-LarkCliNeedsBind($Status) {
+  if (-not $Status) { return $false }
+  return (($Status.ok -eq $false) -and ($Status.error.subtype -eq "not_configured") -and ("$($Status.error.message)" -match "not bound|not configured|not_configured"))
+}
 function Show-LarkAuthStatus {
   $status = Get-LarkAuthStatus
   if (-not $status) {
     Warn "lark-cli 授权：未检测到有效配置"
+    return $false
+  }
+  if (Test-LarkCliNeedsBind $status) {
+    Warn "lark-cli 授权：检测到 Hermes 上下文，但还没有绑定到 lark-cli"
     return $false
   }
   $botReady = $status.identities.bot.available -eq $true
@@ -140,6 +148,25 @@ function Show-LarkAuthStatus {
   }
   Warn "lark-cli 授权：未登录"
   return $false
+}
+function Ensure-LarkCliBinding {
+  $status = Get-LarkAuthStatus
+  if (-not (Test-LarkCliNeedsBind $status)) { return $true }
+  Say "需要先把 Hermes 的飞书应用配置绑定到 lark-cli，然后才能发起用户授权。"
+  Say "身份策略说明："
+  Say "  1) bot-only：只使用机器人身份，更安全；不能访问个人日历、邮箱、云文档等用户资源。"
+  Say "  2) user-default：允许用户身份，适合需要访问个人资源的课程/工作流。"
+  if (-not (Confirm-Step "绑定 Hermes 飞书配置到 lark-cli")) { return $false }
+  $choice = Read-Host "选择身份策略 [1=bot-only / 2=user-default，默认 2]"
+  $identity = if ($choice -eq "1") { "bot-only" } else { "user-default" }
+  try {
+    Invoke-LarkCli @("config", "bind", "--source", "hermes", "--identity", $identity)
+    Ok "已绑定 lark-cli：$identity"
+    return $true
+  } catch {
+    Warn "lark-cli 配置绑定失败：$($_.Exception.Message)"
+    return $false
+  }
 }
 function Get-HermesCommand {
   $cmd = Get-Command "hermes.cmd" -ErrorAction SilentlyContinue
@@ -1655,6 +1682,7 @@ function Configure-LarkCliAuth {
     return
   }
   Say "飞书 CLI 需要授权后才能访问日历、文档、多维表格、消息等用户 API。"
+  if (-not (Ensure-LarkCliBinding)) { return }
   Say "推荐先使用最小推荐权限登录：lark-cli auth login --recommend"
   Say "如果后续某个功能提示缺权限，再按提示追加对应 domain 或 scope。"
   if (Confirm-Step "登录 / 授权飞书 CLI 用户身份") {

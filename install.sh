@@ -1228,21 +1228,35 @@ lark_auth_ready(){
   has_cmd lark-cli || return 1
   py="$(main_python_cmd)"
   [ -n "$py" ] || return 1
-  status="$(lark-cli auth status 2>/dev/null)"
+  status="$(lark-cli auth status 2>&1)"
   [ -n "$status" ] || return 1
   printf '%s' "$status" | "$py" -c 'import json,sys; s=json.load(sys.stdin); sys.exit(0 if s.get("identities",{}).get("user",{}).get("available") else 1)' 2>/dev/null
+}
+
+lark_needs_bind(){
+  local py status
+  has_cmd lark-cli || return 1
+  py="$(main_python_cmd)"
+  [ -n "$py" ] || return 1
+  status="$(lark-cli auth status 2>&1)"
+  [ -n "$status" ] || return 1
+  printf '%s' "$status" | "$py" -c 'import json,sys; s=json.load(sys.stdin); e=s.get("error",{}); msg=e.get("message",""); sys.exit(0 if s.get("ok") is False and e.get("subtype")=="not_configured" and ("not bound" in msg or "not configured" in msg) else 1)' 2>/dev/null
 }
 
 show_lark_auth_status(){
   local status py result
   has_cmd lark-cli || { warn "lark-cli 授权：未安装"; return 1; }
-  status="$(lark-cli auth status 2>/dev/null)"
+  status="$(lark-cli auth status 2>&1)"
   if [ -z "$status" ]; then
     warn "lark-cli 授权：未检测到有效配置"
     return 1
   fi
   py="$(main_python_cmd)"
   if [ -n "$py" ]; then
+    if printf '%s' "$status" | "$py" -c 'import json,sys; s=json.load(sys.stdin); e=s.get("error",{}); msg=e.get("message",""); sys.exit(0 if s.get("ok") is False and e.get("subtype")=="not_configured" and ("not bound" in msg or "not configured" in msg) else 1)' 2>/dev/null; then
+      warn "lark-cli 授权：检测到 Hermes 上下文，但还没有绑定到 lark-cli"
+      return 1
+    fi
     result="$(printf '%s' "$status" | "$py" -c 'import json,sys; s=json.load(sys.stdin); ids=s.get("identities",{}); print("user" if ids.get("user",{}).get("available") else ("bot" if ids.get("bot",{}).get("available") else "none"))' 2>/dev/null)"
     case "$result" in
       user) ok "lark-cli 授权：用户身份已登录"; return 0 ;;
@@ -1250,6 +1264,28 @@ show_lark_auth_status(){
     esac
   fi
   warn "lark-cli 授权：未登录"
+  return 1
+}
+
+ensure_lark_cli_binding(){
+  local choice identity
+  lark_needs_bind || return 0
+  say "需要先把 Hermes 的飞书应用配置绑定到 lark-cli，然后才能发起用户授权。"
+  say "身份策略说明："
+  say "  1) bot-only：只使用机器人身份，更安全；不能访问个人日历、邮箱、云文档等用户资源。"
+  say "  2) user-default：允许用户身份，适合需要访问个人资源的课程/工作流。"
+  confirm "绑定 Hermes 飞书配置到 lark-cli" || return 1
+  printf "${CYN}选择身份策略 [1=bot-only / 2=user-default，默认 2]：${RST}"
+  IFS= read -r choice </dev/tty 2>/dev/null
+  case "$choice" in
+    1) identity="bot-only" ;;
+    *) identity="user-default" ;;
+  esac
+  if lark-cli config bind --source hermes --identity "$identity"; then
+    ok "已绑定 lark-cli：$identity"
+    return 0
+  fi
+  warn "lark-cli 配置绑定失败"
   return 1
 }
 
@@ -1264,6 +1300,7 @@ configure_lark_cli_auth(){
     return
   fi
   say "飞书 CLI 需要授权后才能访问日历、文档、多维表格、消息等用户 API。"
+  ensure_lark_cli_binding || return
   say "推荐先使用最小推荐权限登录：lark-cli auth login --recommend"
   say "如果后续某个功能提示缺权限，再按提示追加对应 domain 或 scope。"
   if confirm "登录 / 授权飞书 CLI 用户身份"; then
