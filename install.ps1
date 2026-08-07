@@ -1573,6 +1573,55 @@ function Show-HermesGatewayGuide {
   Say "  Done：配置完 Feishu / Lark 后选择 Done 退出平台选择。"
 }
 
+function Get-HermesConfigPath {
+  if (-not (HasHermes)) { return $null }
+  try {
+    $path = Invoke-Hermes @("config", "path") 2>$null | Select-Object -First 1
+    if ($path -and (Test-Path $path)) { return $path }
+  } catch {}
+  $fallbacks = @(
+    (Join-Path $env:USERPROFILE ".hermes\config.yaml"),
+    (Join-Path $env:LOCALAPPDATA "hermes\config.yaml")
+  )
+  foreach ($path in $fallbacks) {
+    if ($path -and (Test-Path $path)) { return $path }
+  }
+  return $null
+}
+
+function Get-HermesModelSummary {
+  $path = Get-HermesConfigPath
+  if (-not $path) { return $null }
+  $provider = ""
+  $model = ""
+  $inModel = $false
+  foreach ($line in (Get-Content $path -ErrorAction SilentlyContinue)) {
+    if ($line -match '^model:\s*$') { $inModel = $true; continue }
+    if ($inModel -and $line -match '^\S') { break }
+    if ($inModel -and $line -match '^\s+provider:\s*(.+?)\s*$') { $provider = ($matches[1] -replace '^[\s''"]+|[\s''"]+$', '') }
+    if ($inModel -and $line -match '^\s+default:\s*(.+?)\s*$') { $model = ($matches[1] -replace '^[\s''"]+|[\s''"]+$', '') }
+  }
+  if ($provider -and $model) { return "$provider / $model" }
+  if ($provider) { return $provider }
+  return $null
+}
+
+function Test-HermesFeishuGatewayConfigured {
+  $path = Get-HermesConfigPath
+  if (-not $path) { return $false }
+  $home = Split-Path $path -Parent
+  $profileDir = Join-Path $home "profiles"
+  if (-not (Test-Path $profileDir)) { return $false }
+  try {
+    $files = Get-ChildItem -Path $profileDir -Filter "channel_directory.json" -Recurse -ErrorAction SilentlyContinue
+    foreach ($file in $files) {
+      $compact = (Get-Content $file.FullName -Raw -ErrorAction SilentlyContinue) -replace '\s+', ''
+      if ($compact -match '"feishu":\[\{' -or $compact -match '"lark":\[\{') { return $true }
+    }
+  } catch {}
+  return $false
+}
+
 function Get-HermesMissingPrereqs {
   $missing = New-Object System.Collections.Generic.List[string]
   if (-not (Get-Python3Command)) { $missing.Add("Python 3") }
@@ -1814,7 +1863,14 @@ function Check-All {
   if (HasCommand "ffmpeg") { Ok "ffmpeg：已安装" } else { Warn "ffmpeg：未安装" }
   if (HasGlobalTool "yt-dlp") { Ok "yt-dlp：$(yt-dlp --version | Select-Object -First 1)" } else { Warn "yt-dlp：未安装全局入口" }
   if (HasCommand "rg") { Ok "ripgrep：$(rg --version | Select-Object -First 1)" } else { Warn "ripgrep：未安装" }
-  if (HasHermes) { Ok "Hermes：$(Invoke-Hermes @("--version") | Select-Object -First 1)" } else { Warn "Hermes：未安装" }
+  if (HasHermes) {
+    Ok "Hermes：$(Invoke-Hermes @("--version") | Select-Object -First 1)"
+    $hermesModel = Get-HermesModelSummary
+    if ($hermesModel) { Ok "Hermes 接口模型：$hermesModel" } else { Warn "Hermes 接口模型：未配置" }
+    if (Test-HermesFeishuGatewayConfigured) { Ok "Hermes 飞书 / Lark 通道：已配置" } else { Warn "Hermes 飞书 / Lark 通道：未配置" }
+  } else {
+    Warn "Hermes：未安装"
+  }
   if (HasCommand "codex") { Ok "Codex CLI：$(codex --version | Select-Object -First 1)" } else { Warn "Codex CLI：未安装" }
   $desktop = Get-CodexDesktopInstall
   if ($desktop) { Ok "ChatGPT / Codex Desktop：$desktop" } else { Warn "ChatGPT / Codex Desktop：未检测到" }

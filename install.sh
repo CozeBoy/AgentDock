@@ -1153,6 +1153,55 @@ show_hermes_gateway_guide(){
   say "  Done：配置完 Feishu / Lark 后选择 Done 退出平台选择。"
 }
 
+hermes_config_path(){
+  if has_cmd hermes; then
+    local path
+    path="$(hermes config path 2>/dev/null | head -1)"
+    [ -n "$path" ] && [ -f "$path" ] && { printf '%s\n' "$path"; return 0; }
+  fi
+  [ -f "$HOME/.hermes/config.yaml" ] && { printf '%s\n' "$HOME/.hermes/config.yaml"; return 0; }
+  return 1
+}
+
+hermes_model_summary(){
+  local path provider model
+  path="$(hermes_config_path)" || return 1
+  provider="$(awk '
+    /^model:[[:space:]]*$/ { in_model=1; next }
+    in_model && /^[^[:space:]]/ { exit }
+    in_model && /^[[:space:]]+provider:/ { sub(/^[[:space:]]+provider:[[:space:]]*/, ""); gsub(/^["'\'']|["'\'']$/, ""); print; exit }
+  ' "$path" 2>/dev/null)"
+  model="$(awk '
+    /^model:[[:space:]]*$/ { in_model=1; next }
+    in_model && /^[^[:space:]]/ { exit }
+    in_model && /^[[:space:]]+default:/ { sub(/^[[:space:]]+default:[[:space:]]*/, ""); gsub(/^["'\'']|["'\'']$/, ""); print; exit }
+  ' "$path" 2>/dev/null)"
+  if [ -n "$provider" ] && [ -n "$model" ]; then
+    printf '%s / %s\n' "$provider" "$model"
+  elif [ -n "$provider" ]; then
+    printf '%s\n' "$provider"
+  else
+    return 1
+  fi
+}
+
+hermes_feishu_gateway_configured(){
+  local path home file compact
+  path="$(hermes_config_path)" || return 1
+  home="$(dirname "$path")"
+  [ -d "$home/profiles" ] || return 1
+  while IFS= read -r file; do
+    [ -n "$file" ] || continue
+    compact="$(tr -d '[:space:]' < "$file" 2>/dev/null)"
+    case "$compact" in
+      *'"feishu":[{'*|*'"lark":[{'*) return 0 ;;
+    esac
+  done <<EOF
+$(find "$home/profiles" -name channel_directory.json -type f 2>/dev/null)
+EOF
+  return 1
+}
+
 install_codex_cli(){
   step "Codex CLI"
   has_cmd codex && { ok "Codex CLI 已安装：$(codex --version 2>/dev/null | head -1)"; return; }
@@ -1371,7 +1420,15 @@ check_all(){
     has_cmd node && ok "Node.js：$(node -v 2>/dev/null)" || warn "Node.js：未安装"
   fi
   python3_cmd >/dev/null 2>&1 && ok "Python 3：$($(python3_cmd) --version 2>/dev/null)" || warn "Python 3：未安装"
-  has_cmd hermes && ok "Hermes：$(hermes --version 2>/dev/null | head -1)" || warn "Hermes：未安装"
+  if has_cmd hermes; then
+    ok "Hermes：$(hermes --version 2>/dev/null | head -1)"
+    local hermes_model
+    hermes_model="$(hermes_model_summary 2>/dev/null)"
+    [ -n "$hermes_model" ] && ok "Hermes 接口模型：$hermes_model" || warn "Hermes 接口模型：未配置"
+    hermes_feishu_gateway_configured && ok "Hermes 飞书 / Lark 通道：已配置" || warn "Hermes 飞书 / Lark 通道：未配置"
+  else
+    warn "Hermes：未安装"
+  fi
   has_cmd codex && ok "Codex CLI：$(codex --version 2>/dev/null | head -1)" || warn "Codex CLI：未安装"
   detect_codex_desktop >/dev/null 2>&1 && ok "ChatGPT / Codex Desktop：$(detect_codex_desktop)" || warn "ChatGPT / Codex Desktop：未检测到"
   if has_cmd lark-cli; then
