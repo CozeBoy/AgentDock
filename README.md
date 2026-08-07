@@ -9,7 +9,7 @@
 - Codex CLI
 - Node.js
 - 飞书 / Lark CLI
-- Python 3.11
+- Python 3
 - Whisper
 
 脚本支持 HTTP 代理下载，内置常用本地代理选项：
@@ -65,7 +65,7 @@ macOS 也会维护 PATH：安装模式会写入 Homebrew、`~/.local/bin`、Herm
 安装顺序会先处理依赖环境，再安装上层工具：
 
 1. macOS 基础依赖：Xcode Command Line Tools、Homebrew
-2. 通用运行环境：nvm / Node.js、Python 3.11
+2. 通用运行环境：nvm / Node.js、Python 3
 3. 媒体 / Hermes 依赖：ffmpeg、yt-dlp、ripgrep（Windows）
 4. Agent 工具：Hermes Agent、Codex CLI、ChatGPT / Codex Desktop、飞书 CLI
 5. Whisper
@@ -162,8 +162,8 @@ Windows:
 - ChatGPT / Codex Desktop：macOS 检查 `/Applications/ChatGPT.app` 和 `/Applications/Codex.app`；Windows 检查 Appx 包、WindowsApps 下的 `OpenAI.Codex_*\\app\\ChatGPT.exe`、常见本地安装目录
 - Node.js：macOS 会先加载已有 nvm，再优先 Homebrew，否则使用 nvm；Windows 会先加载常见 nvm-windows 路径，否则下载官方 Node.js LTS zip；管理员 PowerShell 安装到 `C:\Program Files\nodejs` 并写入系统 PATH，非管理员回退到用户目录并写入用户 PATH
 - 飞书 CLI：npm 包 `@larksuite/cli`
-- Python 3.11：Hermes Agent 明确检查 Python 3.11；脚本会并行安装 Python 3.11，不会删除或覆盖已有 Python 版本；macOS 优先 Homebrew；Windows 下载 python.org 官方 Python 3.11 安装器
+- Python 3：脚本会接受已有的任意全局 Python 3，例如 Python 3.11 / 3.12 / 3.13 / 3.14；只有完全未检测到 Python 3 时才提示安装。Hermes Agent 如果需要 Python 3.11，会使用自己的隔离运行时，脚本不会把 Hermes 自带 Python 当作全局 Python，也不会加入全局 PATH
 - ffmpeg：macOS 使用 Homebrew；Windows 下载 gyan.dev 官方 zip 并解压到系统/用户目录
-- yt-dlp：优先通过 Python 模块安装（`python -m pip install --user --upgrade yt-dlp`）；会尽量给可写且带 pip 的系统/用户 Python 与主 Python 3.11 安装模块。Hermes 自带 Python 只服务 Hermes，不会加入全局 PATH，也不会作为 yt-dlp 安装目标。Windows 如果 pip 安装后仍未检测到命令，会下载 GitHub 官方 `yt-dlp.exe` 兜底
+- yt-dlp：优先通过 Python 模块安装（`python -m pip install --user --upgrade yt-dlp`）；会尽量给可写且带 pip 的系统/用户 Python 与主 Python 3 安装模块。Hermes 自带 Python 只服务 Hermes，不会加入全局 PATH，也不会作为 yt-dlp 安装目标。Windows 如果 pip 安装后仍未检测到命令，会下载 GitHub 官方 `yt-dlp.exe` 兜底
 - ripgrep：Windows 会在 Hermes Agent 前预装 ripgrep，避免 Hermes 子安装器再走 winget
-- Whisper：Python 包 `openai-whisper`，会尽量给可写且带 pip 的系统/用户 Python 与主 Python 3.11 安装模块。Hermes 自带 Python 只服务 Hermes，不会加入全局 PATH，也不会作为 Whisper 安装目标；安装模块后会单独选择是否预下载模型，支持 `fast/turbo`、`normal/base`、`tiny`、`small`、`medium`、`large`、`skip`
+- Whisper：Python 包 `openai-whisper`，会尽量给可写且带 pip 的系统/用户 Python 与主 Python 3 安装模块。Hermes 自带 Python 只服务 Hermes，不会加入全局 PATH，也不会作为 Whisper 安装目标；安装模块后会单独选择是否预下载模型，支持 `fast/turbo`、`normal/base`、`tiny`、`small`、`medium`、`large`、`skip`

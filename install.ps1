@@ -433,11 +433,11 @@ function Test-PythonVirtualEnv([string]$PythonCommand) {
 
 function Get-PythonTargets {
   $raw = New-Object System.Collections.Generic.List[string]
-  $python311 = Get-Python311Command
-  if ($python311) { $raw.Add($python311) }
+  $python3 = Get-Python3Command
+  if ($python3) { $raw.Add($python3) }
   if (HasCommand "py") {
-    $raw.Add("py -3.11")
     $raw.Add("py -3")
+    $raw.Add("py -3.11")
     try {
       py -0p 2>$null | ForEach-Object {
         $line = "$_".Trim()
@@ -479,10 +479,10 @@ function Get-PythonTargets {
 }
 
 function Get-MainPythonCommand {
-  $python311 = Get-Python311Command
-  if ($python311) { return $python311 }
-  if (HasCommand "python") { return "python" }
+  $python3 = Get-Python3Command
+  if ($python3) { return $python3 }
   if (HasCommand "py") { return "py -3" }
+  if (HasCommand "python") { return "python" }
   return $null
 }
 
@@ -1004,56 +1004,57 @@ function Load-NvmIfPresent {
 }
 
 function Ensure-Python {
-  return (Ensure-Python311)
-}
-
-function Ensure-Python311 {
-  $python311 = Get-Python311Command
-  if ($python311) {
-    Ok "Python 3.11 已安装：$(Get-PythonCommandDisplay $python311)"
+  $python3 = Get-Python3Command
+  if ($python3) {
+    Ok "Python 3 已安装：$(Get-PythonCommandDisplay $python3)"
     return $true
   }
-  if ($Check) { Warn "Python 3.11 未安装"; return $false }
-  Warn "将并行安装 Python 3.11，不会删除或覆盖已有 Python 版本。"
-  if (-not (Confirm-Step "安装 Python 3.11（Hermes Agent 和 Whisper 推荐）")) { return $false }
-  Install-PythonFromOfficialInstaller "3.11"
-  $python311 = Get-Python311Command
-  return [bool]$python311
+  if ($Check) { Warn "Python 3 未安装"; return $false }
+  Warn "未检测到可用的全局 Python 3。"
+  if (-not (Confirm-Step "安装 Python 3（yt-dlp / Whisper 需要）")) { return $false }
+  Install-PythonFromOfficialInstaller "3"
+  $python3 = Get-Python3Command
+  return [bool]$python3
 }
 
-function Get-Python311Command {
-  if (HasCommand "py") {
-    try {
-      py -3.11 --version *> $null
-      if ($LASTEXITCODE -eq 0 -and (Test-StandalonePython "py -3.11")) { return "py -3.11" }
-    } catch {}
-  }
-  $candidates = @(
-    "$env:ProgramFiles\Python311\python.exe",
-    "$env:LOCALAPPDATA\Programs\Python\Python311\python.exe"
-  )
+function Get-Python3Command {
+  $candidates = New-Object System.Collections.Generic.List[string]
+  if (HasCommand "python") { $candidates.Add("python") }
+  if (HasCommand "python3") { $candidates.Add("python3") }
+  if (HasCommand "py") { $candidates.Add("py -3") }
+  $candidates.Add("$env:ProgramFiles\Python314\python.exe")
+  $candidates.Add("$env:ProgramFiles\Python313\python.exe")
+  $candidates.Add("$env:ProgramFiles\Python312\python.exe")
+  $candidates.Add("$env:ProgramFiles\Python311\python.exe")
+  $candidates.Add("$env:LOCALAPPDATA\Programs\Python\Python314\python.exe")
+  $candidates.Add("$env:LOCALAPPDATA\Programs\Python\Python313\python.exe")
+  $candidates.Add("$env:LOCALAPPDATA\Programs\Python\Python312\python.exe")
+  $candidates.Add("$env:LOCALAPPDATA\Programs\Python\Python311\python.exe")
   foreach ($candidate in $candidates) {
-    if ((Test-Path $candidate) -and (Test-StandalonePython $candidate)) { return $candidate }
-  }
-  if (HasCommand "python") {
+    if (-not $candidate) { continue }
+    if ($candidate -like "*.exe" -and -not (Test-Path $candidate)) { continue }
+    if (-not (Test-PythonCommand $candidate)) { continue }
     try {
-      $version = (& python -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>$null)
-      if ($version -eq "3.11" -and (Test-StandalonePython "python")) { return "python" }
+      $major = Invoke-PythonCommand $candidate @("-c", "import sys; print(sys.version_info.major)") 2>$null | Select-Object -First 1
+      if ($major -eq "3" -and (Test-StandalonePython $candidate)) { return $candidate }
     } catch {}
   }
   return $null
 }
 
 function Get-PythonCommandDisplay([string]$Command) {
-  $version = Get-Python311Version $Command
+  $version = Get-PythonVersion $Command
   $exe = Get-PythonExecutablePath $Command
   if ($exe) { return "$version ($exe)" }
   return $version
 }
 
-function Get-Python311Version([string]$Command) {
+function Get-PythonVersion([string]$Command) {
   if ($Command -eq "py -3.11") {
     return (py -3.11 --version)
+  }
+  if ($Command -eq "py -3") {
+    return (py -3 --version)
   }
   return (& $Command --version)
 }
@@ -1074,7 +1075,11 @@ function Get-PythonInstallerUrl([string]$MinorVersion) {
   Invoke-WebDownload "https://www.python.org/downloads/windows/" $pageFile
   $html = Get-Content $pageFile -Raw
   $escapedMinor = [regex]::Escape($MinorVersion)
-  $pattern = "https://www\.python\.org/ftp/python/($escapedMinor\.\d+)/python-\1-$archSuffix\.exe"
+  if ($MinorVersion -eq "3") {
+    $pattern = "https://www\.python\.org/ftp/python/(3\.\d+\.\d+)/python-\1-$archSuffix\.exe"
+  } else {
+    $pattern = "https://www\.python\.org/ftp/python/($escapedMinor\.\d+)/python-\1-$archSuffix\.exe"
+  }
   $matches = [regex]::Matches($html, $pattern)
   if ($matches.Count -gt 0) { return $matches[0].Value }
   if ($MinorVersion -eq "3.11" -and $archSuffix -eq "amd64") {
@@ -1089,10 +1094,10 @@ function Install-PythonFromOfficialInstaller([string]$MinorVersion) {
   Say "准备下载 Python 官方安装器：$installerUrl"
   Invoke-WebDownload $installerUrl $installer
   if (Test-IsAdministrator) {
-    Say "执行：Python 3.11 系统静默安装（并行安装，包含 pip，并写入系统 PATH）"
+    Say "执行：Python $MinorVersion 系统静默安装（并行安装，包含 pip，并写入系统 PATH）"
     $args = "/quiet InstallAllUsers=1 PrependPath=1 Include_pip=1 Include_launcher=1 SimpleInstall=1"
   } else {
-    Say "执行：Python 3.11 用户静默安装（并行安装，包含 pip，并写入用户 PATH）"
+    Say "执行：Python $MinorVersion 用户静默安装（并行安装，包含 pip，并写入用户 PATH）"
     $args = "/quiet InstallAllUsers=0 PrependPath=1 Include_pip=1 Include_launcher=1 SimpleInstall=1"
   }
   $process = Start-Process -FilePath $installer -ArgumentList $args -Wait -PassThru
@@ -1104,13 +1109,17 @@ function Install-PythonFromOfficialInstaller([string]$MinorVersion) {
 function Register-PythonPaths {
   $candidateRoots = @(
     "$env:ProgramFiles\Python",
-    "$env:ProgramFiles\Python311",
+    "$env:ProgramFiles\Python314",
     "$env:ProgramFiles\Python313",
     "$env:ProgramFiles\Python312",
+    "$env:ProgramFiles\Python311",
     "$env:LOCALAPPDATA\Programs\Python",
     "$env:APPDATA\Python"
   ) | Where-Object { $_ -and (Test-Path $_) }
   foreach ($root in $candidateRoots) {
+    if (Test-Path (Join-Path $root "python.exe")) { Add-UserPath $root }
+    $rootScripts = Join-Path $root "Scripts"
+    if (Test-Path $rootScripts) { Add-UserPath $rootScripts }
     Get-ChildItem -Path $root -Directory -ErrorAction SilentlyContinue | ForEach-Object {
       if (Test-Path (Join-Path $_.FullName "python.exe")) { Add-UserPath $_.FullName }
       $scripts = Join-Path $_.FullName "Scripts"
@@ -1266,7 +1275,7 @@ function Install-Hermes {
 
 function Get-HermesMissingPrereqs {
   $missing = New-Object System.Collections.Generic.List[string]
-  if (-not (Get-Python311Command)) { $missing.Add("Python 3.11") }
+  if (-not (Get-Python3Command)) { $missing.Add("Python 3") }
   if (-not (HasCommand "rg")) { $missing.Add("ripgrep") }
   if (-not (HasCommand "ffmpeg")) { $missing.Add("ffmpeg") }
   if (-not (HasCommand "node")) { $missing.Add("Node.js") }
@@ -1408,7 +1417,7 @@ function Register-ToolPaths {
 }
 
 function Install-Python {
-  Step "Python 3.11"
+  Step "Python 3"
   Ensure-Python | Out-Null
 }
 
@@ -1457,8 +1466,8 @@ function Check-All {
   Say "系统：Windows $([Environment]::OSVersion.Version)"
   if (HasCommand "nvm") { Ok "nvm：已检测到" } else { Warn "nvm：未检测到" }
   if (HasCommand "node") { Ok "Node.js：$(node -v)" } else { Warn "Node.js：未安装" }
-  $python311 = Get-Python311Command
-  if ($python311) { Ok "Python 3.11：$(Get-PythonCommandDisplay $python311)" } else { Warn "Python 3.11：未安装" }
+  $python3 = Get-Python3Command
+  if ($python3) { Ok "Python 3：$(Get-PythonCommandDisplay $python3)" } else { Warn "Python 3：未安装" }
   if (HasCommand "ffmpeg") { Ok "ffmpeg：已安装" } else { Warn "ffmpeg：未安装" }
   if (HasCommand "yt-dlp") { Ok "yt-dlp：$(yt-dlp --version | Select-Object -First 1)" } else { Warn "yt-dlp：未安装" }
   if (HasCommand "rg") { Ok "ripgrep：$(rg --version | Select-Object -First 1)" } else { Warn "ripgrep：未安装" }

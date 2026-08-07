@@ -534,7 +534,10 @@ download_whisper_model(){
   esac
   step "预下载 Whisper 模型：$model"
   say "${DIM}首次加载会下载模型文件，Whisper 会显示缓存和下载进度。${RST}"
-  "$(python311_cmd)" - <<PY
+  local py
+  py="$(main_python_cmd)"
+  [ -n "$py" ] || { warn "Python 3 不可用，跳过 Whisper 模型预下载"; return; }
+  "$py" - <<PY
 import whisper
 whisper.load_model("$model")
 print("Whisper model ready: $model")
@@ -561,8 +564,8 @@ add_path_once(){
 refresh_common_paths(){
   [ -d "/opt/homebrew/bin" ] && add_path_once "/opt/homebrew/bin" "Homebrew"
   [ -d "/usr/local/bin" ] && add_path_once "/usr/local/bin" "Homebrew"
-  [ -d "/opt/homebrew/opt/python@3.11/bin" ] && add_path_once "/opt/homebrew/opt/python@3.11/bin" "Python 3.11"
-  [ -d "/usr/local/opt/python@3.11/bin" ] && add_path_once "/usr/local/opt/python@3.11/bin" "Python 3.11"
+  [ -d "/opt/homebrew/opt/python@3.11/bin" ] && add_path_once "/opt/homebrew/opt/python@3.11/bin" "Python 3"
+  [ -d "/usr/local/opt/python@3.11/bin" ] && add_path_once "/usr/local/opt/python@3.11/bin" "Python 3"
   [ -d "$HOME/.local/bin" ] && add_path_once "$HOME/.local/bin" "用户命令"
   [ -d "$HOME/.hermes/bin" ] && add_path_once "$HOME/.hermes/bin" "Hermes"
   ensure_nvm_shell_init
@@ -711,24 +714,53 @@ ensure_npm_user_prefix(){
 }
 
 ensure_python(){
-  if python311_cmd >/dev/null 2>&1; then
-    ok "Python 3.11 已安装：$($(python311_cmd) --version 2>/dev/null)"
+  if python3_cmd >/dev/null 2>&1; then
+    ok "Python 3 已安装：$($(python3_cmd) --version 2>/dev/null)"
     return 0
   fi
   if [ "$CHECK_ONLY" = "1" ]; then
-    warn "Python 3.11 未安装"
+    warn "Python 3 未安装"
     return 1
   fi
-  warn "将并行安装 Python 3.11，不会删除或覆盖已有 Python 版本。"
-  confirm "安装 Python 3.11（Hermes Agent 和 Whisper 推荐）" || return 1
+  warn "未检测到可用的全局 Python 3。"
+  confirm "安装 Python 3（yt-dlp / Whisper 需要）" || return 1
   if has_cmd brew; then
-    say "${DIM}执行：brew install python@3.11${RST}"
-    brew install python@3.11
+    say "${DIM}执行：brew install python${RST}"
+    brew install python
   else
     warn "未检测到 Homebrew，无法自动安装 Python；请稍后手动安装或先安装 Homebrew"
     return 1
   fi
   refresh_common_paths
+}
+
+python3_cmd(){
+  local candidate major
+  for candidate in python3 python python3.14 python3.13 python3.12 python3.11 \
+    "/opt/homebrew/bin/python3" \
+    "/usr/local/bin/python3" \
+    "/opt/homebrew/opt/python@3.14/bin/python3.14" \
+    "/usr/local/opt/python@3.14/bin/python3.14" \
+    "/opt/homebrew/opt/python@3.13/bin/python3.13" \
+    "/usr/local/opt/python@3.13/bin/python3.13" \
+    "/opt/homebrew/opt/python@3.12/bin/python3.12" \
+    "/usr/local/opt/python@3.12/bin/python3.12" \
+    "/opt/homebrew/opt/python@3.11/bin/python3.11" \
+    "/usr/local/opt/python@3.11/bin/python3.11"
+  do
+    if [ -x "$candidate" ] || command -v "$candidate" >/dev/null 2>&1; then
+      major="$("$candidate" - <<'PY' 2>/dev/null
+import sys
+print(sys.version_info.major)
+PY
+)"
+      if [ "$major" = "3" ] && ! python_is_venv "$candidate"; then
+        printf '%s\n' "$candidate"
+        return 0
+      fi
+    fi
+  done
+  return 1
 }
 
 python311_cmd(){
@@ -777,10 +809,10 @@ PY
 list_python_targets(){
   local candidate key seen=""
   for candidate in \
-    "$(python311_cmd 2>/dev/null)" \
-    "python3.11" \
+    "$(python3_cmd 2>/dev/null)" \
     "python3" \
-    "python"
+    "python" \
+    "python3.11"
   do
     [ -n "$candidate" ] || continue
     if [ -x "$candidate" ] || command -v "$candidate" >/dev/null 2>&1; then
@@ -806,8 +838,8 @@ list_python_targets(){
 }
 
 main_python_cmd(){
-  if python311_cmd >/dev/null 2>&1; then
-    python311_cmd
+  if python3_cmd >/dev/null 2>&1; then
+    python3_cmd
   elif has_cmd python3; then
     printf '%s\n' "python3"
   elif has_cmd python; then
@@ -968,14 +1000,14 @@ install_lark_cli(){
 }
 
 install_python(){
-  step "Python 3.11"
+  step "Python 3"
   ensure_python
 }
 
 install_whisper(){
   step "Whisper"
   local whisper_installed=0
-  if { python311_cmd >/dev/null 2>&1 && "$(python311_cmd)" -m whisper --help >/dev/null 2>&1; } || has_cmd whisper; then
+  if { python3_cmd >/dev/null 2>&1 && "$(python3_cmd)" -m whisper --help >/dev/null 2>&1; } || has_cmd whisper; then
     ok "Whisper 已安装"
     whisper_installed=1
   fi
@@ -1002,14 +1034,14 @@ check_all(){
   xcode-select -p >/dev/null 2>&1 && ok "Xcode Command Line Tools：已安装" || warn "Xcode Command Line Tools：未安装"
   has_cmd nvm && ok "nvm：已检测到" || warn "nvm：未检测到"
   has_cmd node && ok "Node.js：$(node -v 2>/dev/null)" || warn "Node.js：未安装"
-  python311_cmd >/dev/null 2>&1 && ok "Python 3.11：$($(python311_cmd) --version 2>/dev/null)" || warn "Python 3.11：未安装"
+  python3_cmd >/dev/null 2>&1 && ok "Python 3：$($(python3_cmd) --version 2>/dev/null)" || warn "Python 3：未安装"
   has_cmd hermes && ok "Hermes：$(hermes --version 2>/dev/null | head -1)" || warn "Hermes：未安装"
   has_cmd codex && ok "Codex CLI：$(codex --version 2>/dev/null | head -1)" || warn "Codex CLI：未安装"
   detect_codex_desktop >/dev/null 2>&1 && ok "ChatGPT / Codex Desktop：$(detect_codex_desktop)" || warn "ChatGPT / Codex Desktop：未检测到"
   has_cmd lark-cli && ok "lark-cli：$(lark-cli --version 2>/dev/null | head -1)" || warn "lark-cli：未安装"
   has_cmd ffmpeg && ok "ffmpeg：已安装" || warn "ffmpeg：未安装"
   has_cmd yt-dlp && ok "yt-dlp：$(yt-dlp --version 2>/dev/null | head -1)" || warn "yt-dlp：未安装"
-  has_cmd whisper || { python311_cmd >/dev/null 2>&1 && "$(python311_cmd)" -m whisper --help >/dev/null 2>&1; } && ok "Whisper：已安装" || warn "Whisper：未安装"
+  has_cmd whisper || { python3_cmd >/dev/null 2>&1 && "$(python3_cmd)" -m whisper --help >/dev/null 2>&1; } && ok "Whisper：已安装" || warn "Whisper：未安装"
 }
 
 main(){
