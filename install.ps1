@@ -17,13 +17,26 @@ $OriginalProxyEnv = @{
   http_proxy = $env:http_proxy
   https_proxy = $env:https_proxy
   all_proxy = $env:all_proxy
+  PIP_PROXY = $env:PIP_PROXY
+  PIP_INDEX_URL = $env:PIP_INDEX_URL
+  PIP_EXTRA_INDEX_URL = $env:PIP_EXTRA_INDEX_URL
+  UV_DEFAULT_INDEX = $env:UV_DEFAULT_INDEX
+  UV_INDEX = $env:UV_INDEX
+  UV_INDEX_URL = $env:UV_INDEX_URL
 }
 $ProxyEnvApplied = $false
+$PackageMirrorsApplied = $false
 $NpmProxyChanged = $false
 $OriginalNpmProxy = $null
 $OriginalNpmHttpsProxy = $null
+$NpmRegistryChanged = $false
+$OriginalNpmRegistry = $null
 $GitHttpsRewriteApplied = $false
 $OriginalGitInsteadOf = $null
+$OriginalGitHttpProxy = $null
+$OriginalGitHttpsProxy = $null
+$OriginalNoColor = $env:NO_COLOR
+$NoColorApplied = $false
 
 function Say($Text) { Write-Host $Text }
 function Ok($Text) { Write-Host "OK $Text" -ForegroundColor Green }
@@ -32,6 +45,42 @@ function Fail($Text) { Write-Host "ERR $Text" -ForegroundColor Red }
 function Step($Text) { Write-Host ""; Write-Host "==> $Text" -ForegroundColor Cyan }
 function HasCommand($Name) { [bool](Get-Command $Name -ErrorAction SilentlyContinue) }
 function EffectsEnabled { return (-not $env:NO_COLOR) }
+
+function Enable-AnsiConsole {
+  if ($env:NO_COLOR) { return $false }
+  try {
+    if (-not ("AgentDockConsole" -as [type])) {
+      Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+public static class AgentDockConsole {
+  [DllImport("kernel32.dll", SetLastError=true)] public static extern IntPtr GetStdHandle(int nStdHandle);
+  [DllImport("kernel32.dll", SetLastError=true)] public static extern bool GetConsoleMode(IntPtr hConsoleHandle, out int lpMode);
+  [DllImport("kernel32.dll", SetLastError=true)] public static extern bool SetConsoleMode(IntPtr hConsoleHandle, int dwMode);
+}
+"@ -ErrorAction Stop
+    }
+    $stdout = [AgentDockConsole]::GetStdHandle(-11)
+    $mode = 0
+    if (-not [AgentDockConsole]::GetConsoleMode($stdout, [ref]$mode)) { return $false }
+    $enableVirtualTerminal = 0x0004
+    return [AgentDockConsole]::SetConsoleMode($stdout, ($mode -bor $enableVirtualTerminal))
+  } catch {
+    return $false
+  }
+}
+
+function Prepare-ConsoleOutput {
+  if (Enable-AnsiConsole) {
+    Ok "已启用 Windows ANSI/VT 终端显示"
+    return
+  }
+  if (-not $env:NO_COLOR) {
+    $env:NO_COLOR = "1"
+    $script:NoColorApplied = $true
+    Warn "当前终端不支持 ANSI/VT 显示，已为子安装器临时关闭颜色输出"
+  }
+}
 
 function Show-Intro {
   if (-not (EffectsEnabled)) { return }
@@ -138,14 +187,22 @@ if ($ProxyUrl) {
   $env:http_proxy = $ProxyUrl
   $env:https_proxy = $ProxyUrl
   $env:all_proxy = $ProxyUrl
+  $env:PIP_PROXY = $ProxyUrl
   $script:ProxyEnvApplied = $true
   Ok "已启用代理：$ProxyUrl"
-  Say "子安装器将继承代理环境变量：HTTP_PROXY / HTTPS_PROXY / ALL_PROXY"
+  Say "子安装器将继承代理环境变量：HTTP_PROXY / HTTPS_PROXY / ALL_PROXY / PIP_PROXY"
 } else {
   Warn "未启用代理"
 }
 
 function Restore-ProxyEnvironment {
+  if ($script:NoColorApplied) {
+    if ([string]::IsNullOrEmpty($script:OriginalNoColor)) {
+      Remove-Item "Env:NO_COLOR" -ErrorAction SilentlyContinue
+    } else {
+      Set-Item "Env:NO_COLOR" $script:OriginalNoColor
+    }
+  }
   if ($script:ProxyEnvApplied) {
     foreach ($key in $script:OriginalProxyEnv.Keys) {
       $value = $script:OriginalProxyEnv[$key]
@@ -160,20 +217,148 @@ function Restore-ProxyEnvironment {
     if ($script:OriginalNpmProxy) { npm config set proxy $script:OriginalNpmProxy | Out-Null } else { npm config delete proxy | Out-Null }
     if ($script:OriginalNpmHttpsProxy) { npm config set https-proxy $script:OriginalNpmHttpsProxy | Out-Null } else { npm config delete https-proxy | Out-Null }
   }
+  if ($script:NpmRegistryChanged -and (HasCommand "npm")) {
+    if ($script:OriginalNpmRegistry) { npm config set registry $script:OriginalNpmRegistry | Out-Null } else { npm config delete registry | Out-Null }
+  }
   Restore-GitHttpsRewrite
-  if ($script:ProxyEnvApplied -or $script:NpmProxyChanged) {
-    Ok "已恢复安装前的代理环境"
+  if ($script:ProxyEnvApplied -or $script:PackageMirrorsApplied -or $script:NpmProxyChanged -or $script:NpmRegistryChanged -or $script:GitHttpsRewriteApplied) {
+    Ok "已恢复安装前的代理 / 镜像 / npm / Git 配置"
   }
   $script:ProxyEnvApplied = $false
+  $script:PackageMirrorsApplied = $false
   $script:NpmProxyChanged = $false
+  $script:NpmRegistryChanged = $false
+  $script:NoColorApplied = $false
+}
+
+function Apply-NpmProxy {
+  if (-not $ProxyUrl) { return }
+  if (-not (HasCommand "npm")) { return }
+  if (-not $script:NpmProxyChanged) {
+    $script:OriginalNpmProxy = (npm config get proxy 2>$null)
+    if ($script:OriginalNpmProxy -eq "null") { $script:OriginalNpmProxy = $null }
+    $script:OriginalNpmHttpsProxy = (npm config get https-proxy 2>$null)
+    if ($script:OriginalNpmHttpsProxy -eq "null") { $script:OriginalNpmHttpsProxy = $null }
+  }
+  npm config set proxy $ProxyUrl | Out-Null
+  npm config set https-proxy $ProxyUrl | Out-Null
+  npm config set fetch-timeout 600000 | Out-Null
+  npm config set fetch-retries 5 | Out-Null
+  $script:NpmProxyChanged = $true
+  Ok "已临时设置 npm 代理：$ProxyUrl"
+}
+
+function Set-NpmRegistryTemporary([string]$Registry) {
+  if (-not (HasCommand "npm")) { return }
+  if (-not $script:NpmRegistryChanged) {
+    $script:OriginalNpmRegistry = (npm config get registry 2>$null)
+    if ($script:OriginalNpmRegistry -eq "undefined") { $script:OriginalNpmRegistry = $null }
+  }
+  npm config set registry $Registry | Out-Null
+  $script:NpmRegistryChanged = $true
+}
+
+function Apply-PackageMirrors {
+  if ($script:PackageMirrorsApplied) {
+    if (HasCommand "npm") {
+      if ($ProxyUrl) {
+        Set-NpmRegistryTemporary "https://registry.npmjs.org/"
+      } else {
+        Set-NpmRegistryTemporary "https://registry.npmmirror.com"
+      }
+    }
+    return
+  }
+  if ($ProxyUrl) {
+    $env:PIP_INDEX_URL = "https://pypi.org/simple"
+    Remove-Item Env:PIP_EXTRA_INDEX_URL -ErrorAction SilentlyContinue
+    $env:UV_DEFAULT_INDEX = "https://pypi.org/simple"
+    Remove-Item Env:UV_INDEX -ErrorAction SilentlyContinue
+    Remove-Item Env:UV_INDEX_URL -ErrorAction SilentlyContinue
+    $script:PackageMirrorsApplied = $true
+    Ok "已临时设置 pip / uv 使用官方源，网络全部走代理"
+    if (HasCommand "npm") {
+      Set-NpmRegistryTemporary "https://registry.npmjs.org/"
+      Ok "已临时设置 npm registry：https://registry.npmjs.org/"
+    }
+    return
+  }
+  $env:PIP_INDEX_URL = "https://pypi.tuna.tsinghua.edu.cn/simple"
+  $env:PIP_EXTRA_INDEX_URL = "https://mirrors.aliyun.com/pypi/simple https://pypi.org/simple"
+  $env:UV_INDEX = "https://pypi.tuna.tsinghua.edu.cn/simple https://mirrors.aliyun.com/pypi/simple"
+  $env:UV_DEFAULT_INDEX = "https://pypi.org/simple"
+  $env:UV_INDEX_URL = $env:PIP_INDEX_URL
+  $script:PackageMirrorsApplied = $true
+  Ok "已临时设置 pip / uv 国内镜像，官方源作为兜底"
+  if (HasCommand "npm") {
+    Set-NpmRegistryTemporary "https://registry.npmmirror.com"
+    Ok "已临时设置 npm registry：https://registry.npmmirror.com"
+  }
+}
+
+function Invoke-WithoutProxy([scriptblock]$Action) {
+  $saved = @{
+    HTTP_PROXY = $env:HTTP_PROXY
+    HTTPS_PROXY = $env:HTTPS_PROXY
+    ALL_PROXY = $env:ALL_PROXY
+    http_proxy = $env:http_proxy
+    https_proxy = $env:https_proxy
+    all_proxy = $env:all_proxy
+    PIP_PROXY = $env:PIP_PROXY
+  }
+  foreach ($key in $saved.Keys) { Remove-Item "Env:$key" -ErrorAction SilentlyContinue }
+  try { & $Action } finally {
+    foreach ($key in $saved.Keys) {
+      if ([string]::IsNullOrEmpty($saved[$key])) { Remove-Item "Env:$key" -ErrorAction SilentlyContinue } else { Set-Item "Env:$key" $saved[$key] }
+    }
+  }
+}
+
+function Install-NpmGlobal([string]$PackageName) {
+  if ($ProxyUrl) {
+    Apply-NpmProxy
+    Set-NpmRegistryTemporary "https://registry.npmjs.org/"
+    Say "执行：npm install -g $PackageName（走代理访问官方 npm registry）"
+    npm install -g $PackageName
+    return
+  }
+  Set-NpmRegistryTemporary "https://registry.npmmirror.com"
+  Say "执行：npm install -g $PackageName（优先 npm 国内镜像）"
+  Invoke-WithoutProxy { npm install -g $PackageName }
+  if ($LASTEXITCODE -ne 0) {
+    Warn "npm 国内镜像安装失败，切换官方源直连重试：$PackageName"
+    Set-NpmRegistryTemporary "https://registry.npmjs.org/"
+    npm install -g $PackageName
+  }
+}
+
+function Install-PipUser([string]$PythonCommand, [string[]]$PipArgs) {
+  if ($ProxyUrl) {
+    Say "执行：$PythonCommand -m pip install --user $($PipArgs -join ' ')（走代理访问官方 PyPI）"
+    & $PythonCommand -m pip install --user --index-url "https://pypi.org/simple" @PipArgs
+    return
+  }
+  Say "执行：$PythonCommand -m pip install --user $($PipArgs -join ' ')（优先 pip 国内镜像）"
+  Invoke-WithoutProxy { & $PythonCommand -m pip install --user --index-url "https://pypi.tuna.tsinghua.edu.cn/simple" --extra-index-url "https://mirrors.aliyun.com/pypi/simple" --extra-index-url "https://pypi.org/simple" @PipArgs }
+  if ($LASTEXITCODE -ne 0) {
+    Warn "pip 国内镜像安装失败，切换官方源直连重试"
+    & $PythonCommand -m pip install --user --index-url "https://pypi.org/simple" @PipArgs
+  }
 }
 
 function Enable-GitHttpsRewrite {
+  if ($script:GitHttpsRewriteApplied) { return }
   if (-not (HasCommand "git")) { return }
   $script:OriginalGitInsteadOf = (git config --global --get url.https://github.com/.insteadOf 2>$null)
+  $script:OriginalGitHttpProxy = (git config --global --get http.proxy 2>$null)
+  $script:OriginalGitHttpsProxy = (git config --global --get https.proxy 2>$null)
   git config --global url.https://github.com/.insteadOf git@github.com: | Out-Null
+  if ($ProxyUrl) {
+    git config --global http.proxy $ProxyUrl | Out-Null
+    git config --global https.proxy $ProxyUrl | Out-Null
+  }
   $script:GitHttpsRewriteApplied = $true
-  Ok "已临时设置 Git：git@github.com: 将改走 https://github.com/"
+  Ok "已临时设置 Git：SSH 地址改走 HTTPS，HTTPS clone 使用代理"
 }
 
 function Restore-GitHttpsRewrite {
@@ -183,8 +368,18 @@ function Restore-GitHttpsRewrite {
   } else {
     git config --global --unset url.https://github.com/.insteadOf 2>$null
   }
+  if ($script:OriginalGitHttpProxy) {
+    git config --global http.proxy $script:OriginalGitHttpProxy | Out-Null
+  } else {
+    git config --global --unset http.proxy 2>$null
+  }
+  if ($script:OriginalGitHttpsProxy) {
+    git config --global https.proxy $script:OriginalGitHttpsProxy | Out-Null
+  } else {
+    git config --global --unset https.proxy 2>$null
+  }
   $script:GitHttpsRewriteApplied = $false
-  Ok "已恢复安装前的 Git URL rewrite 配置"
+  Ok "已恢复安装前的 Git 配置"
 }
 
 function Confirm-Step([string]$Prompt) {
@@ -385,6 +580,7 @@ function Invoke-WebDownload([string]$Url, [string]$OutFile) {
 function Get-UrlCandidates([string]$Url) {
   $items = New-Object System.Collections.Generic.List[string]
   $items.Add($Url)
+  if ($ProxyUrl) { return $items }
   if ($Url.StartsWith("https://github.com/") -or $Url.StartsWith("https://raw.githubusercontent.com/")) {
     foreach ($mirror in $GithubAccelerators) { $items.Add("$mirror$Url") }
     if ($env:GITHUB_ACCELERATORS_EXTRA) {
@@ -783,7 +979,9 @@ function Install-Hermes {
   try {
     Invoke-WebDownload "https://hermes-agent.nousresearch.com/install.ps1" $script
     if ($ProxyUrl) { Say "Hermes 子安装器将继承代理：$ProxyUrl" }
+    Apply-NpmProxy
     Enable-GitHttpsRewrite
+    Say "提示：Hermes 后续可能会安装自己的 npm/browser tools 依赖，这是项目依赖，不是重新安装 Node.js。"
     powershell -ExecutionPolicy Bypass -File $script
     Register-ToolPaths
   } catch {
@@ -872,6 +1070,7 @@ function Get-CodexDesktopInstall {
 function Install-Node {
   Step "Node.js"
   Ensure-Node | Out-Null
+  Apply-PackageMirrors
 }
 
 function Install-LarkCli {
@@ -880,17 +1079,8 @@ function Install-LarkCli {
   if ($Check) { Warn "lark-cli 未安装"; return }
   if (-not (Ensure-Node)) { Fail "npm 不可用，无法安装飞书 CLI"; return }
   if (-not (Confirm-Step "安装飞书 / Lark CLI")) { return }
-  if ($ProxyUrl) {
-    $script:OriginalNpmProxy = (npm config get proxy 2>$null)
-    if ($script:OriginalNpmProxy -eq "null") { $script:OriginalNpmProxy = $null }
-    $script:OriginalNpmHttpsProxy = (npm config get https-proxy 2>$null)
-    if ($script:OriginalNpmHttpsProxy -eq "null") { $script:OriginalNpmHttpsProxy = $null }
-    npm config set proxy $ProxyUrl | Out-Null
-    npm config set https-proxy $ProxyUrl | Out-Null
-    $script:NpmProxyChanged = $true
-  }
   Register-NpmGlobalPath
-  npm install -g @larksuite/cli
+  Install-NpmGlobal "@larksuite/cli"
   Register-NpmGlobalPath
   try { lark-cli update | Out-Null } catch {}
 }
@@ -968,10 +1158,8 @@ function Install-Whisper {
   if (-not (HasCommand "python")) { Fail "Python 不可用，无法安装 Whisper"; return }
   if (-not $whisperInstalled) {
     if (-not (Confirm-Step "安装 Whisper（openai-whisper Python 包）")) { return }
-    Say "执行：python -m pip install --user --upgrade pip"
-    python -m pip install --user --upgrade pip
-    Say "执行：python -m pip install --user --upgrade openai-whisper"
-    python -m pip install --user --upgrade openai-whisper
+    Install-PipUser "python" @("--upgrade", "pip")
+    Install-PipUser "python" @("--upgrade", "openai-whisper")
   }
   $pythonUserBase = (python -m site --user-base 2>$null)
   if ($pythonUserBase) { Add-UserPath (Join-Path $pythonUserBase "Scripts") }
@@ -999,6 +1187,7 @@ function Check-All {
   if (HasCommand "whisper") { Ok "Whisper：已安装" } else { Warn "Whisper：未安装" }
 }
 
+Prepare-ConsoleOutput
 Show-Intro
 Suggest-Elevation
 Write-Host "------------------------------------------------------------"
@@ -1007,6 +1196,8 @@ Write-Host "------------------------------------------------------------"
 
 Check-All
 if ($Check) { Graceful-Exit }
+Apply-PackageMirrors
+Enable-GitHttpsRewrite
 Install-Node
 Install-Python
 Install-Ffmpeg

@@ -29,15 +29,27 @@ WHISPER_MODEL_INPUT=""
 
 ORIGINAL_http_proxy="${http_proxy-}"
 ORIGINAL_https_proxy="${https_proxy-}"
+ORIGINAL_all_proxy="${all_proxy-}"
 ORIGINAL_HTTP_PROXY="${HTTP_PROXY-}"
 ORIGINAL_HTTPS_PROXY="${HTTPS_PROXY-}"
 ORIGINAL_ALL_PROXY="${ALL_PROXY-}"
+ORIGINAL_PIP_PROXY="${PIP_PROXY-}"
+ORIGINAL_PIP_INDEX_URL="${PIP_INDEX_URL-}"
+ORIGINAL_PIP_EXTRA_INDEX_URL="${PIP_EXTRA_INDEX_URL-}"
+ORIGINAL_UV_DEFAULT_INDEX="${UV_DEFAULT_INDEX-}"
+ORIGINAL_UV_INDEX="${UV_INDEX-}"
+ORIGINAL_UV_INDEX_URL="${UV_INDEX_URL-}"
 PROXY_ENV_APPLIED=0
+PACKAGE_MIRRORS_APPLIED=0
 NPM_PROXY_CHANGED=0
 ORIGINAL_NPM_PROXY=""
 ORIGINAL_NPM_HTTPS_PROXY=""
+ORIGINAL_NPM_REGISTRY=""
+NPM_REGISTRY_CHANGED=0
 GIT_HTTPS_REWRITE_APPLIED=0
 ORIGINAL_GIT_INSTEADOF=""
+ORIGINAL_GIT_HTTP_PROXY=""
+ORIGINAL_GIT_HTTPS_PROXY=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -116,9 +128,11 @@ apply_proxy_env(){
   [ -z "$PROXY_URL" ] && { warn "未启用代理"; return; }
   export http_proxy="$PROXY_URL"
   export https_proxy="$PROXY_URL"
+  export all_proxy="$PROXY_URL"
   export HTTP_PROXY="$PROXY_URL"
   export HTTPS_PROXY="$PROXY_URL"
   export ALL_PROXY="$PROXY_URL"
+  export PIP_PROXY="$PROXY_URL"
   PROXY_ENV_APPLIED=1
   ok "已启用代理：$PROXY_URL"
 }
@@ -133,30 +147,157 @@ restore_var(){
 }
 
 cleanup_proxy(){
-  [ "$PROXY_ENV_APPLIED" = "1" ] || [ "$NPM_PROXY_CHANGED" = "1" ] || return
+  [ "$PROXY_ENV_APPLIED" = "1" ] || [ "$PACKAGE_MIRRORS_APPLIED" = "1" ] || [ "$NPM_PROXY_CHANGED" = "1" ] || [ "$NPM_REGISTRY_CHANGED" = "1" ] || [ "$GIT_HTTPS_REWRITE_APPLIED" = "1" ] || return
   restore_var http_proxy "$ORIGINAL_http_proxy"
   restore_var https_proxy "$ORIGINAL_https_proxy"
+  restore_var all_proxy "$ORIGINAL_all_proxy"
   restore_var HTTP_PROXY "$ORIGINAL_HTTP_PROXY"
   restore_var HTTPS_PROXY "$ORIGINAL_HTTPS_PROXY"
   restore_var ALL_PROXY "$ORIGINAL_ALL_PROXY"
+  restore_var PIP_PROXY "$ORIGINAL_PIP_PROXY"
+  restore_var PIP_INDEX_URL "$ORIGINAL_PIP_INDEX_URL"
+  restore_var PIP_EXTRA_INDEX_URL "$ORIGINAL_PIP_EXTRA_INDEX_URL"
+  restore_var UV_DEFAULT_INDEX "$ORIGINAL_UV_DEFAULT_INDEX"
+  restore_var UV_INDEX "$ORIGINAL_UV_INDEX"
+  restore_var UV_INDEX_URL "$ORIGINAL_UV_INDEX_URL"
   if [ "$NPM_PROXY_CHANGED" = "1" ] && has_cmd npm; then
     if [ -n "$ORIGINAL_NPM_PROXY" ]; then npm config set proxy "$ORIGINAL_NPM_PROXY" >/dev/null 2>&1; else npm config delete proxy >/dev/null 2>&1; fi
     if [ -n "$ORIGINAL_NPM_HTTPS_PROXY" ]; then npm config set https-proxy "$ORIGINAL_NPM_HTTPS_PROXY" >/dev/null 2>&1; else npm config delete https-proxy >/dev/null 2>&1; fi
   fi
+  if [ "$NPM_REGISTRY_CHANGED" = "1" ] && has_cmd npm; then
+    if [ -n "$ORIGINAL_NPM_REGISTRY" ]; then npm config set registry "$ORIGINAL_NPM_REGISTRY" >/dev/null 2>&1; else npm config delete registry >/dev/null 2>&1; fi
+  fi
   restore_git_https_rewrite
-  ok "已恢复安装前的代理环境"
+  ok "已恢复安装前的代理 / 镜像 / npm / Git 配置"
   PROXY_ENV_APPLIED=0
+  PACKAGE_MIRRORS_APPLIED=0
   NPM_PROXY_CHANGED=0
+  NPM_REGISTRY_CHANGED=0
 }
 
 trap cleanup_proxy EXIT
 
+apply_npm_proxy(){
+  [ -n "$PROXY_URL" ] || return
+  has_cmd npm || return
+  if [ "$NPM_PROXY_CHANGED" != "1" ]; then
+    ORIGINAL_NPM_PROXY="$(npm config get proxy 2>/dev/null)"
+    [ "$ORIGINAL_NPM_PROXY" = "null" ] && ORIGINAL_NPM_PROXY=""
+    ORIGINAL_NPM_HTTPS_PROXY="$(npm config get https-proxy 2>/dev/null)"
+    [ "$ORIGINAL_NPM_HTTPS_PROXY" = "null" ] && ORIGINAL_NPM_HTTPS_PROXY=""
+  fi
+  npm config set proxy "$PROXY_URL" >/dev/null 2>&1
+  npm config set https-proxy "$PROXY_URL" >/dev/null 2>&1
+  npm config set fetch-timeout 600000 >/dev/null 2>&1
+  npm config set fetch-retries 5 >/dev/null 2>&1
+  NPM_PROXY_CHANGED=1
+  ok "已临时设置 npm 代理：$PROXY_URL"
+}
+
+apply_package_mirrors(){
+  if [ "$PACKAGE_MIRRORS_APPLIED" = "1" ]; then
+    if [ -n "$PROXY_URL" ]; then
+      has_cmd npm && set_npm_registry_official
+    else
+      has_cmd npm && apply_npm_registry_mirror
+    fi
+    return
+  fi
+  if [ -n "$PROXY_URL" ]; then
+    export PIP_INDEX_URL="https://pypi.org/simple"
+    unset PIP_EXTRA_INDEX_URL
+    export UV_DEFAULT_INDEX="https://pypi.org/simple"
+    unset UV_INDEX
+    unset UV_INDEX_URL
+    PACKAGE_MIRRORS_APPLIED=1
+    ok "已临时设置 pip / uv 使用官方源，网络全部走代理"
+    has_cmd npm && set_npm_registry_official
+    return
+  fi
+  export PIP_INDEX_URL="https://pypi.tuna.tsinghua.edu.cn/simple"
+  export PIP_EXTRA_INDEX_URL="https://mirrors.aliyun.com/pypi/simple https://pypi.org/simple"
+  export UV_INDEX="https://pypi.tuna.tsinghua.edu.cn/simple https://mirrors.aliyun.com/pypi/simple"
+  export UV_DEFAULT_INDEX="https://pypi.org/simple"
+  export UV_INDEX_URL="$PIP_INDEX_URL"
+  PACKAGE_MIRRORS_APPLIED=1
+  ok "已临时设置 pip / uv 国内镜像，官方源作为兜底"
+
+  has_cmd npm || return
+  apply_npm_registry_mirror
+}
+
+apply_npm_registry_mirror(){
+  [ -n "$PROXY_URL" ] && return
+  has_cmd npm || return
+  [ "$NPM_REGISTRY_CHANGED" = "1" ] && return
+  ORIGINAL_NPM_REGISTRY="$(npm config get registry 2>/dev/null)"
+  [ "$ORIGINAL_NPM_REGISTRY" = "undefined" ] && ORIGINAL_NPM_REGISTRY=""
+  npm config set registry "https://registry.npmmirror.com" >/dev/null 2>&1
+  NPM_REGISTRY_CHANGED=1
+  ok "已临时设置 npm registry：https://registry.npmmirror.com"
+}
+
+set_npm_registry_official(){
+  has_cmd npm || return
+  [ "$NPM_REGISTRY_CHANGED" != "1" ] && {
+    ORIGINAL_NPM_REGISTRY="$(npm config get registry 2>/dev/null)"
+    [ "$ORIGINAL_NPM_REGISTRY" = "undefined" ] && ORIGINAL_NPM_REGISTRY=""
+  }
+  npm config set registry "https://registry.npmjs.org/" >/dev/null 2>&1
+  NPM_REGISTRY_CHANGED=1
+  ok "已临时设置 npm registry：https://registry.npmjs.org/"
+}
+
+without_proxy_env(){
+  env -u http_proxy -u https_proxy -u all_proxy -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY -u PIP_PROXY "$@"
+}
+
+npm_install_global(){
+  local package_name="$1"
+  if [ -n "$PROXY_URL" ]; then
+    apply_npm_proxy
+    set_npm_registry_official
+    say "${DIM}执行：npm install -g $package_name（走代理访问官方 npm registry）${RST}"
+    npm install -g "$package_name"
+    return
+  fi
+  apply_npm_registry_mirror
+  say "${DIM}执行：npm install -g $package_name（优先 npm 国内镜像）${RST}"
+  npm install -g "$package_name" || {
+    warn "npm 国内镜像安装失败，切换官方源直连重试：$package_name"
+    npm config set registry "https://registry.npmjs.org/" >/dev/null 2>&1
+    npm install -g "$package_name"
+  }
+}
+
+pip_install_user(){
+  local py="$1"; shift
+  if [ -n "$PROXY_URL" ]; then
+    say "${DIM}执行：$py -m pip install --user $*（走代理访问官方 PyPI）${RST}"
+    "$py" -m pip install --user --index-url "https://pypi.org/simple" "$@"
+    return
+  fi
+  say "${DIM}执行：$py -m pip install --user $*（优先 pip 国内镜像）${RST}"
+  if without_proxy_env "$py" -m pip install --user --index-url "$PIP_INDEX_URL" --extra-index-url "https://mirrors.aliyun.com/pypi/simple" --extra-index-url "https://pypi.org/simple" "$@"; then
+    return 0
+  fi
+  warn "pip 国内镜像安装失败，切换官方源直连重试"
+  "$py" -m pip install --user --index-url "https://pypi.org/simple" "$@"
+}
+
 enable_git_https_rewrite(){
+  [ "$GIT_HTTPS_REWRITE_APPLIED" = "1" ] && return
   has_cmd git || return
   ORIGINAL_GIT_INSTEADOF="$(git config --global --get url.https://github.com/.insteadOf 2>/dev/null)"
+  ORIGINAL_GIT_HTTP_PROXY="$(git config --global --get http.proxy 2>/dev/null)"
+  ORIGINAL_GIT_HTTPS_PROXY="$(git config --global --get https.proxy 2>/dev/null)"
   git config --global url.https://github.com/.insteadOf git@github.com: >/dev/null 2>&1
+  if [ -n "$PROXY_URL" ]; then
+    git config --global http.proxy "$PROXY_URL" >/dev/null 2>&1
+    git config --global https.proxy "$PROXY_URL" >/dev/null 2>&1
+  fi
   GIT_HTTPS_REWRITE_APPLIED=1
-  ok "已临时设置 Git：git@github.com: 将改走 https://github.com/"
+  ok "已临时设置 Git：SSH 地址改走 HTTPS，HTTPS clone 使用代理"
 }
 
 restore_git_https_rewrite(){
@@ -167,8 +308,18 @@ restore_git_https_rewrite(){
   else
     git config --global --unset url.https://github.com/.insteadOf >/dev/null 2>&1
   fi
+  if [ -n "$ORIGINAL_GIT_HTTP_PROXY" ]; then
+    git config --global http.proxy "$ORIGINAL_GIT_HTTP_PROXY" >/dev/null 2>&1
+  else
+    git config --global --unset http.proxy >/dev/null 2>&1
+  fi
+  if [ -n "$ORIGINAL_GIT_HTTPS_PROXY" ]; then
+    git config --global https.proxy "$ORIGINAL_GIT_HTTPS_PROXY" >/dev/null 2>&1
+  else
+    git config --global --unset https.proxy >/dev/null 2>&1
+  fi
   GIT_HTTPS_REWRITE_APPLIED=0
-  ok "已恢复安装前的 Git URL rewrite 配置"
+  ok "已恢复安装前的 Git 配置"
 }
 
 curl_download(){
@@ -239,6 +390,7 @@ run_with_spinner(){
 github_candidates(){
   local url="$1" mirror
   printf '%s\n' "$url"
+  [ -n "$PROXY_URL" ] && return
   case "$url" in
     https://github.com/*|https://raw.githubusercontent.com/*)
       for mirror in $GITHUB_ACCELERATORS; do
@@ -384,7 +536,7 @@ PY
 }
 
 add_path_once(){
-  local dir="$1" marker="$2" rc line
+  local dir="$1" marker="$2" rc line changed=0
   [ -d "$dir" ] || return
   dir="$(cd "$dir" 2>/dev/null && pwd -P)"
   case ":$PATH:" in *":$dir:"*) ;; *) export PATH="$dir:$PATH" ;; esac
@@ -392,13 +544,12 @@ add_path_once(){
   line="export PATH=\"$dir:\$PATH\" # Agent 航海环境部署工具：$marker"
   for rc in "$HOME/.zshrc" "$HOME/.zprofile" "$HOME/.bash_profile" "$HOME/.bashrc"; do
     [ -e "$rc" ] || touch "$rc" 2>/dev/null
-    if grep -qF "$dir" "$rc" 2>/dev/null; then
-      ok "PATH 已包含：$dir"
-    else
+    if ! grep -qF "$dir" "$rc" 2>/dev/null; then
       printf '\n%s\n' "$line" >> "$rc"
-      ok "已写入 PATH：$dir -> $rc"
+      changed=1
     fi
   done
+  [ "$changed" = "1" ] && ok "已写入 PATH：$dir"
 }
 
 refresh_common_paths(){
@@ -426,7 +577,7 @@ refresh_common_paths(){
 }
 
 ensure_nvm_shell_init(){
-  local nvm_dir rc
+  local nvm_dir rc changed=0
   [ "$CHECK_ONLY" = "1" ] && return
   nvm_dir="${NVM_DIR:-$HOME/.nvm}"
   [ -s "$nvm_dir/nvm.sh" ] || return
@@ -437,9 +588,10 @@ ensure_nvm_shell_init(){
         printf '\nexport NVM_DIR="%s" # Agent 航海环境部署工具：nvm\n' "$nvm_dir"
         printf '[ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" # Agent 航海环境部署工具：nvm\n'
       } >> "$rc"
-      ok "已写入 nvm 初始化：$rc"
+      changed=1
     fi
   done
+  [ "${changed:-0}" = "1" ] && ok "已写入 nvm 初始化"
 }
 
 ensure_xcode_clt(){
@@ -509,6 +661,7 @@ ensure_node(){
     fi
   fi
   refresh_common_paths
+  apply_package_mirrors
   has_cmd node && has_cmd npm && ok "Node.js 安装完成：$(node -v 2>/dev/null)"
 }
 
@@ -607,6 +760,8 @@ install_hermes(){
   has_cmd hermes && { ok "Hermes 已安装：$(hermes --version 2>/dev/null | head -1)"; return; }
   [ "$CHECK_ONLY" = "1" ] && { warn "Hermes 未安装"; return; }
   confirm "安装 Hermes Agent" || return
+  say "${DIM}提示：Hermes 后续可能会安装自己的 npm/browser tools 依赖，这是项目依赖，不是重新安装 Node.js。${RST}"
+  apply_npm_proxy
   curl_download "https://hermes-agent.nousresearch.com/install.sh" "$TMPDIR/hermes-install.sh" &&
     enable_git_https_rewrite &&
     bash "$TMPDIR/hermes-install.sh"
@@ -666,6 +821,7 @@ install_homebrew(){
 install_node(){
   step "Node.js"
   ensure_node
+  apply_package_mirrors
 }
 
 install_lark_cli(){
@@ -676,16 +832,7 @@ install_lark_cli(){
   has_cmd npm || { err "npm 不可用，无法安装飞书 CLI"; return; }
   confirm "安装飞书 / Lark CLI" || return
   ensure_npm_user_prefix
-  [ -n "$PROXY_URL" ] && {
-    ORIGINAL_NPM_PROXY="$(npm config get proxy 2>/dev/null)"
-    [ "$ORIGINAL_NPM_PROXY" = "null" ] && ORIGINAL_NPM_PROXY=""
-    ORIGINAL_NPM_HTTPS_PROXY="$(npm config get https-proxy 2>/dev/null)"
-    [ "$ORIGINAL_NPM_HTTPS_PROXY" = "null" ] && ORIGINAL_NPM_HTTPS_PROXY=""
-    npm config set proxy "$PROXY_URL" >/dev/null 2>&1
-    npm config set https-proxy "$PROXY_URL" >/dev/null 2>&1
-    NPM_PROXY_CHANGED=1
-  }
-  npm install -g @larksuite/cli
+  npm_install_global "@larksuite/cli"
   local npm_bin
   npm_bin="$(npm prefix -g 2>/dev/null)/bin"
   add_path_once "$npm_bin" "npm 全局命令"
@@ -711,10 +858,8 @@ install_whisper(){
   ensure_ffmpeg
   if [ "$whisper_installed" = "0" ]; then
     confirm "安装 Whisper（openai-whisper Python 包）" || return
-    say "${DIM}执行：$(python311_cmd) -m pip install --user --upgrade pip${RST}"
-    "$(python311_cmd)" -m pip install --user --upgrade pip
-    say "${DIM}执行：$(python311_cmd) -m pip install --user --upgrade openai-whisper${RST}"
-    "$(python311_cmd)" -m pip install --user --upgrade openai-whisper
+    pip_install_user "$(python311_cmd)" --upgrade pip
+    pip_install_user "$(python311_cmd)" --upgrade openai-whisper
   fi
   local python_user_bin
   python_user_bin="$("$(python311_cmd)" -m site --user-base 2>/dev/null)/bin"
@@ -751,6 +896,8 @@ main(){
   refresh_common_paths
   check_all
   [ "$CHECK_ONLY" = "1" ] && graceful_exit
+  apply_package_mirrors
+  enable_git_https_rewrite
   install_xcode_tools
   install_homebrew
   install_node

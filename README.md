@@ -26,11 +26,13 @@
 - `http://127.0.0.1:7890`
 - 留空表示不使用代理
 
-启用代理后，脚本会设置 `HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY` 以及小写版本 `http_proxy`、`https_proxy`、`all_proxy`，下载主脚本和调用 Hermes/Codex 等子安装器时都会继承这些环境变量。第三方子安装器内部如果使用尊重这些环境变量的工具（如 PowerShell、curl、pip、uv、npm 等），通常会继续走代理。
+未启用代理时，脚本会优先使用国内镜像 / 加速源：npm 使用 `registry.npmmirror.com`，pip / uv 使用清华、阿里云等 PyPI 镜像，GitHub 资源会尝试 ghfast、gh-proxy、gh.llkk.cc、jsDelivr 等候选源。
 
-脚本会在正常完成或通过 `q` 退出时恢复安装前的代理环境变量；临时写入的 npm `proxy` / `https-proxy` 配置也会恢复。
+启用代理后，脚本会改为使用官方源并让网络全部走代理：设置 `HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY`、`PIP_PROXY` 以及小写版本 `http_proxy`、`https_proxy`、`all_proxy`，npm 临时切到 `registry.npmjs.org`，pip / uv 临时切到官方 PyPI。下载主脚本和调用 Hermes/Codex 等子安装器时都会继承这些环境变量。第三方子安装器内部如果使用尊重这些环境变量的工具（如 PowerShell、curl、pip、uv、npm 等），通常会继续走代理。
 
-安装 Hermes Agent 时会临时设置 Git URL rewrite，让 `git@github.com:` 优先改走 `https://github.com/`，避免 SSH 22 端口在代理/国内网络下卡住；脚本结束时会恢复安装前的 Git 配置。
+脚本会在正常完成或通过 `q` 退出时恢复安装前的代理环境变量；临时写入的 npm `proxy` / `https-proxy` / `registry` 配置也会恢复。
+
+安装 Hermes Agent 时会临时设置 Git URL rewrite 和 Git `http.proxy` / `https.proxy`，让 `git@github.com:` 优先改走 `https://github.com/`，并让 HTTPS clone 走所选代理，避免 SSH 22 端口在代理/国内网络下卡住；脚本结束时会恢复安装前的 Git 配置。
 
 GitHub 资源下载会自动尝试多个中国镜像 / 加速源，适合国内网络环境。内置候选包括：
 
@@ -50,7 +52,7 @@ $env:GITHUB_ACCELERATORS_EXTRA = "https://your-proxy.example/"
 powershell -ExecutionPolicy Bypass -File .\install.ps1
 ```
 
-终端支持彩色启动动画。涉及下载时会显示下载地址和进度；Windows 使用自定义单行下载进度，避免 PowerShell 默认进度条占用大块屏幕区域。如果要关闭颜色动效，可以设置 `NO_COLOR=1`。
+终端支持彩色启动动画。涉及下载时会显示下载地址和进度；Windows 使用自定义单行下载进度，避免 PowerShell 默认进度条占用大块屏幕区域。Windows 会主动开启 ANSI/VT 终端显示，避免 Hermes 等子安装器出现 `ESC[35m` 这类控制码；如果当前终端不支持，会临时设置 `NO_COLOR=1` 关闭子安装器颜色输出。
 
 交互确认不会自动安装：按回车继续，输入 `s` 跳过当前步骤，输入 `q` 退出并保留终端窗口。如果某个环境已经安装但脚本没有检测到，建议输入 `s` 跳过。
 
