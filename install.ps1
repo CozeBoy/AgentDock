@@ -112,6 +112,35 @@ function Invoke-LarkCli([string[]]$Arguments) {
   if (-not $lark) { throw "lark-cli 不可用" }
   & $lark @Arguments
 }
+function Get-LarkAuthStatus {
+  if (-not (HasLarkCli)) { return $null }
+  try {
+    $raw = Invoke-LarkCli @("auth", "status") 2>$null | Out-String
+    if ([string]::IsNullOrWhiteSpace($raw)) { return $null }
+    return ($raw | ConvertFrom-Json)
+  } catch {
+    return $null
+  }
+}
+function Show-LarkAuthStatus {
+  $status = Get-LarkAuthStatus
+  if (-not $status) {
+    Warn "lark-cli 授权：未检测到有效配置"
+    return $false
+  }
+  $botReady = $status.identities.bot.available -eq $true
+  $userReady = $status.identities.user.available -eq $true
+  if ($userReady) {
+    Ok "lark-cli 授权：用户身份已登录"
+    return $true
+  }
+  if ($botReady) {
+    Warn "lark-cli 授权：Bot 身份可用，但用户身份未登录"
+    return $false
+  }
+  Warn "lark-cli 授权：未登录"
+  return $false
+}
 function Get-HermesCommand {
   $cmd = Get-Command "hermes.cmd" -ErrorAction SilentlyContinue
   if ($cmd) { return $cmd.Source }
@@ -1534,12 +1563,25 @@ function Install-CodexDesktop {
   $desktop = Get-CodexDesktopInstall
   if ($desktop) { Ok "检测到 $desktop"; return }
   if ($Check) { Warn "未检测到 ChatGPT / Codex Desktop 应用"; return }
+  Show-CodexDesktopInstallHelp
   if (-not (Confirm-Step "打开 ChatGPT / Codex Desktop 官方安装入口")) { return }
   if (HasCommand "codex") {
     try { codex app | Out-Null } catch {}
   }
-  Start-Process "https://chatgpt.com/codex"
+  Start-Process "https://openai.com/chatgpt/download/"
+  Start-Process "ms-windows-store://pdp/?productid=9PLM9XGG6VKS"
   Warn "桌面 App 需要在打开的官方页面中完成下载和登录"
+}
+
+function Show-CodexDesktopInstallHelp {
+  Warn "未检测到 ChatGPT / Codex Desktop。"
+  Say "官方下载页：https://openai.com/chatgpt/download/"
+  Say "Microsoft Store 页面：https://apps.microsoft.com/detail/9PLM9XGG6VKS"
+  Say "Microsoft Store 直达协议：ms-windows-store://pdp/?productid=9PLM9XGG6VKS"
+  Say "可选命令行安装（可能依赖 winget / Microsoft Store，网络不好时会卡）："
+  Say "  winget install --id 9PLM9XGG6VKS -s msstore"
+  Say "备用网盘包（微软商店 Codex 安装包）：https://www.doubao.com/drive/shr/DAAFfMpBmlyOqwdFDPBcIYCjnKf"
+  Say "提示：脚本默认不自动执行 winget；如商店无法打开，可手动使用备用包。"
 }
 
 function Get-CodexDesktopInstall {
@@ -1597,6 +1639,28 @@ function Install-LarkCli {
   Install-NpmGlobal "@larksuite/cli"
   Register-NpmGlobalPath
   try { Invoke-LarkCli @("update") | Out-Null } catch {}
+}
+
+function Configure-LarkCliAuth {
+  Step "飞书 / Lark CLI 授权"
+  if (-not (HasLarkCli)) {
+    Warn "lark-cli 未安装，跳过授权配置"
+    return
+  }
+  $ready = Show-LarkAuthStatus
+  if ($Check) { return }
+  if ($ready) { return }
+  if ($Yes) {
+    Warn "自动模式下跳过飞书 CLI 交互授权；可稍后手动运行 lark-cli auth login --recommend"
+    return
+  }
+  Say "飞书 CLI 需要授权后才能访问日历、文档、多维表格、消息等用户 API。"
+  Say "推荐先使用最小推荐权限登录：lark-cli auth login --recommend"
+  Say "如果后续某个功能提示缺权限，再按提示追加对应 domain 或 scope。"
+  if (Confirm-Step "登录 / 授权飞书 CLI 用户身份") {
+    try { Invoke-LarkCli @("auth", "login", "--recommend") } catch { Warn "飞书 CLI 授权失败：$($_.Exception.Message)" }
+    Show-LarkAuthStatus | Out-Null
+  }
 }
 
 function Register-NpmGlobalPath {
@@ -1712,7 +1776,12 @@ function Check-All {
   if (HasCommand "codex") { Ok "Codex CLI：$(codex --version | Select-Object -First 1)" } else { Warn "Codex CLI：未安装" }
   $desktop = Get-CodexDesktopInstall
   if ($desktop) { Ok "ChatGPT / Codex Desktop：$desktop" } else { Warn "ChatGPT / Codex Desktop：未检测到" }
-  if (HasLarkCli) { Ok "lark-cli：$(Invoke-LarkCli @("--version") | Select-Object -First 1)" } else { Warn "lark-cli：未安装" }
+  if (HasLarkCli) {
+    Ok "lark-cli：$(Invoke-LarkCli @("--version") | Select-Object -First 1)"
+    Show-LarkAuthStatus | Out-Null
+  } else {
+    Warn "lark-cli：未安装"
+  }
   if (HasGlobalTool "whisper") { Ok "Whisper：已安装" } else { Warn "Whisper：未安装全局入口" }
 }
 
@@ -1737,6 +1806,7 @@ Install-Hermes
 Install-CodexCli
 Install-CodexDesktop
 Install-LarkCli
+Configure-LarkCliAuth
 Configure-HermesAgent
 Install-Whisper
 Check-All

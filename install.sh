@@ -1223,6 +1223,55 @@ install_lark_cli(){
   has_cmd lark-cli && lark-cli update >/dev/null 2>&1
 }
 
+lark_auth_ready(){
+  local py status
+  has_cmd lark-cli || return 1
+  py="$(main_python_cmd)"
+  [ -n "$py" ] || return 1
+  status="$(lark-cli auth status 2>/dev/null)"
+  [ -n "$status" ] || return 1
+  printf '%s' "$status" | "$py" -c 'import json,sys; s=json.load(sys.stdin); sys.exit(0 if s.get("identities",{}).get("user",{}).get("available") else 1)' 2>/dev/null
+}
+
+show_lark_auth_status(){
+  local status py result
+  has_cmd lark-cli || { warn "lark-cli 授权：未安装"; return 1; }
+  status="$(lark-cli auth status 2>/dev/null)"
+  if [ -z "$status" ]; then
+    warn "lark-cli 授权：未检测到有效配置"
+    return 1
+  fi
+  py="$(main_python_cmd)"
+  if [ -n "$py" ]; then
+    result="$(printf '%s' "$status" | "$py" -c 'import json,sys; s=json.load(sys.stdin); ids=s.get("identities",{}); print("user" if ids.get("user",{}).get("available") else ("bot" if ids.get("bot",{}).get("available") else "none"))' 2>/dev/null)"
+    case "$result" in
+      user) ok "lark-cli 授权：用户身份已登录"; return 0 ;;
+      bot) warn "lark-cli 授权：Bot 身份可用，但用户身份未登录"; return 1 ;;
+    esac
+  fi
+  warn "lark-cli 授权：未登录"
+  return 1
+}
+
+configure_lark_cli_auth(){
+  step "飞书 / Lark CLI 授权"
+  has_cmd lark-cli || { warn "lark-cli 未安装，跳过授权配置"; return; }
+  show_lark_auth_status
+  [ "$CHECK_ONLY" = "1" ] && return
+  lark_auth_ready && return
+  if [ "$ASSUME_YES" = "1" ]; then
+    warn "自动模式下跳过飞书 CLI 交互授权；可稍后手动运行 lark-cli auth login --recommend"
+    return
+  fi
+  say "飞书 CLI 需要授权后才能访问日历、文档、多维表格、消息等用户 API。"
+  say "推荐先使用最小推荐权限登录：lark-cli auth login --recommend"
+  say "如果后续某个功能提示缺权限，再按提示追加对应 domain 或 scope。"
+  if confirm "登录 / 授权飞书 CLI 用户身份"; then
+    lark-cli auth login --recommend
+    show_lark_auth_status
+  fi
+}
+
 install_python(){
   step "Python 3"
   ensure_python
@@ -1268,7 +1317,12 @@ check_all(){
   has_cmd hermes && ok "Hermes：$(hermes --version 2>/dev/null | head -1)" || warn "Hermes：未安装"
   has_cmd codex && ok "Codex CLI：$(codex --version 2>/dev/null | head -1)" || warn "Codex CLI：未安装"
   detect_codex_desktop >/dev/null 2>&1 && ok "ChatGPT / Codex Desktop：$(detect_codex_desktop)" || warn "ChatGPT / Codex Desktop：未检测到"
-  has_cmd lark-cli && ok "lark-cli：$(lark-cli --version 2>/dev/null | head -1)" || warn "lark-cli：未安装"
+  if has_cmd lark-cli; then
+    ok "lark-cli：$(lark-cli --version 2>/dev/null | head -1)"
+    show_lark_auth_status
+  else
+    warn "lark-cli：未安装"
+  fi
   has_cmd ffmpeg && ok "ffmpeg：已安装" || warn "ffmpeg：未安装"
   has_global_tool yt-dlp && ok "yt-dlp：$(yt-dlp --version 2>/dev/null | head -1)" || warn "yt-dlp：未安装全局入口"
   has_global_tool whisper || { python3_cmd >/dev/null 2>&1 && "$(python3_cmd)" -m whisper --help >/dev/null 2>&1; } && ok "Whisper：已安装" || warn "Whisper：未安装全局入口"
@@ -1296,6 +1350,7 @@ main(){
   install_codex_cli
   install_codex_desktop
   install_lark_cli
+  configure_lark_cli_auth
   configure_hermes_agent
   install_whisper
   check_all

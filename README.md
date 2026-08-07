@@ -184,9 +184,9 @@ Whisper 模型下载如果中断或校验失败，脚本会自动删除当前模
   - `How should direct messages be authorized`：私聊权限，新手推荐 `DM pairing approval`
   - `How should group chats be handled`：群聊响应方式，推荐只在被 @ 时响应
 - Codex CLI：官方安装脚本 `https://chatgpt.com/codex/install.sh` / `install.ps1`
-- ChatGPT / Codex Desktop：macOS 检查 `/Applications/ChatGPT.app` 和 `/Applications/Codex.app`；Windows 检查 Appx 包、WindowsApps 下的 `OpenAI.Codex_*\\app\\ChatGPT.exe`、常见本地安装目录
+- ChatGPT / Codex Desktop：macOS 检查 `/Applications/ChatGPT.app` 和 `/Applications/Codex.app`；Windows 检查 Appx 包、WindowsApps 下的 `OpenAI.Codex_*\\app\\ChatGPT.exe`、常见本地安装目录。Windows 未安装时会提示官方下载页 `https://openai.com/chatgpt/download/`、Microsoft Store 页面 `https://apps.microsoft.com/detail/9PLM9XGG6VKS`、Store 直达协议 `ms-windows-store://pdp/?productid=9PLM9XGG6VKS`，以及备用微软商店 Codex 安装包网盘地址 `https://www.doubao.com/drive/shr/DAAFfMpBmlyOqwdFDPBcIYCjnKf`。如果想命令行尝试安装，可手动运行 `winget install --id 9PLM9XGG6VKS -s msstore`，但脚本默认不自动执行 winget
 - Node.js：macOS 会先加载已有 nvm，再优先 Homebrew，否则使用 nvm；Windows 会先加载常见 nvm-windows 路径，否则下载官方 Node.js LTS zip；管理员 PowerShell 安装到 `C:\Program Files\nodejs` 并写入系统 PATH，非管理员回退到用户目录并写入用户 PATH
-- 飞书 CLI：npm 包 `@larksuite/cli`
+- 飞书 CLI：npm 包 `@larksuite/cli`；脚本会额外检测 `lark-cli auth status`，区分用户身份和 Bot 身份。如果用户身份未登录，会提示运行 `lark-cli auth login --recommend` 完成推荐权限授权
 - Python 3：脚本会接受已有的任意全局 Python 3，例如 Python 3.11 / 3.12 / 3.13 / 3.14；只有完全未检测到 Python 3 时才提示安装。Hermes Agent 如果需要 Python 3.11，会使用自己的隔离运行时，脚本不会把 Hermes 自带 Python 当作全局 Python，也不会加入全局 PATH
 - ffmpeg：macOS 使用 Homebrew；Windows 下载 gyan.dev 官方 zip 并解压到系统/用户目录
 - yt-dlp：优先通过 Python 模块安装（`python -m pip install --user --upgrade yt-dlp`），并且主 Python 会优先处理；如果 pip 没有生成全局命令入口，会用 `uv tool install yt-dlp` 兜底创建用户级入口。Hermes 自带 Python 只服务 Hermes，不会加入全局 PATH，也不会作为 yt-dlp 安装目标；`uvx --from yt-dlp ...` 这类临时运行 / cache 入口不会被视为已全局安装。Windows 如果仍未检测到命令，会下载 GitHub 官方 `yt-dlp.exe` 兜底，这只是命令入口兜底，不替代主 Python 模块安装
