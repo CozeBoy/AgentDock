@@ -97,6 +97,21 @@ function Invoke-Npm([string[]]$Arguments) {
   if (-not $npm) { throw "npm 不可用" }
   & $npm @Arguments
 }
+function Get-LarkCliCommand {
+  $cmd = Get-Command "lark-cli.cmd" -ErrorAction SilentlyContinue
+  if ($cmd) { return $cmd.Source }
+  $cmd = Get-Command "lark-cli.exe" -ErrorAction SilentlyContinue
+  if ($cmd) { return $cmd.Source }
+  $cmd = Get-Command "lark-cli" -CommandType Application -ErrorAction SilentlyContinue
+  if ($cmd) { return $cmd.Source }
+  return $null
+}
+function HasLarkCli { return [bool](Get-LarkCliCommand) }
+function Invoke-LarkCli([string[]]$Arguments) {
+  $lark = Get-LarkCliCommand
+  if (-not $lark) { throw "lark-cli 不可用" }
+  & $lark @Arguments
+}
 function EffectsEnabled { return (-not $env:NO_COLOR) }
 
 function Enable-AnsiConsole {
@@ -1404,14 +1419,14 @@ function Install-Node {
 
 function Install-LarkCli {
   Step "飞书 / Lark CLI"
-  if (HasCommand "lark-cli") { Ok "lark-cli 已安装：$(lark-cli --version | Select-Object -First 1)"; return }
+  if (HasLarkCli) { Ok "lark-cli 已安装：$(Invoke-LarkCli @("--version") | Select-Object -First 1)"; return }
   if ($Check) { Warn "lark-cli 未安装"; return }
   if (-not (Ensure-Node)) { Fail "npm 不可用，无法安装飞书 CLI"; return }
   if (-not (Confirm-Step "安装飞书 / Lark CLI")) { return }
   Register-NpmGlobalPath
   Install-NpmGlobal "@larksuite/cli"
   Register-NpmGlobalPath
-  try { lark-cli update | Out-Null } catch {}
+  try { Invoke-LarkCli @("update") | Out-Null } catch {}
 }
 
 function Register-NpmGlobalPath {
@@ -1523,7 +1538,7 @@ function Check-All {
   if (HasCommand "codex") { Ok "Codex CLI：$(codex --version | Select-Object -First 1)" } else { Warn "Codex CLI：未安装" }
   $desktop = Get-CodexDesktopInstall
   if ($desktop) { Ok "ChatGPT / Codex Desktop：$desktop" } else { Warn "ChatGPT / Codex Desktop：未检测到" }
-  if (HasCommand "lark-cli") { Ok "lark-cli：$(lark-cli --version | Select-Object -First 1)" } else { Warn "lark-cli：未安装" }
+  if (HasLarkCli) { Ok "lark-cli：$(Invoke-LarkCli @("--version") | Select-Object -First 1)" } else { Warn "lark-cli：未安装" }
   if (HasGlobalTool "whisper") { Ok "Whisper：已安装" } else { Warn "Whisper：未安装全局入口" }
 }
 
