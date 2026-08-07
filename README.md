@@ -56,7 +56,7 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1
 复制下面一行命令到终端运行：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/YOUR_GITHUB_USER/YOUR_REPO/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/CozeBoy/AgentDock/main/install.sh | bash
 ```
 
 本地测试：
@@ -70,8 +70,8 @@ bash install.sh --yes
 带参数运行远程脚本：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/YOUR_GITHUB_USER/YOUR_REPO/main/install.sh | bash -s -- --proxy 7890
-curl -fsSL https://raw.githubusercontent.com/YOUR_GITHUB_USER/YOUR_REPO/main/install.sh | bash -s -- --check --no-proxy
+curl -fsSL https://raw.githubusercontent.com/CozeBoy/AgentDock/main/install.sh | bash -s -- --proxy 7890
+curl -fsSL https://raw.githubusercontent.com/CozeBoy/AgentDock/main/install.sh | bash -s -- --check --no-proxy
 ```
 
 ## Windows
@@ -79,7 +79,7 @@ curl -fsSL https://raw.githubusercontent.com/YOUR_GITHUB_USER/YOUR_REPO/main/ins
 复制下面一行命令到 PowerShell 运行：
 
 ```powershell
-irm https://raw.githubusercontent.com/YOUR_GITHUB_USER/YOUR_REPO/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/CozeBoy/AgentDock/main/install.ps1 | iex
 ```
 
 本地测试：
@@ -93,7 +93,7 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1 -Yes
 如果要带参数，建议先下载再运行：
 
 ```powershell
-irm https://raw.githubusercontent.com/YOUR_GITHUB_USER/YOUR_REPO/main/install.ps1 -OutFile install.ps1
+irm https://raw.githubusercontent.com/CozeBoy/AgentDock/main/install.ps1 -OutFile install.ps1
 powershell -ExecutionPolicy Bypass -File .\install.ps1 -Proxy 7890
 ```
 
