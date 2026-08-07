@@ -87,25 +87,13 @@ function EffectsEnabled { return (-not $env:NO_COLOR) }
 function Enable-AnsiConsole {
   if ($env:NO_COLOR) { return $false }
   try {
-    if (-not ("AgentDockConsole" -as [type])) {
-      Add-Type -TypeDefinition @"
-using System;
-using System.Runtime.InteropServices;
-public static class AgentDockConsole {
-  [DllImport("kernel32.dll", SetLastError=true)] public static extern IntPtr GetStdHandle(int nStdHandle);
-  [DllImport("kernel32.dll", SetLastError=true)] public static extern bool GetConsoleMode(IntPtr hConsoleHandle, out int lpMode);
-  [DllImport("kernel32.dll", SetLastError=true)] public static extern bool SetConsoleMode(IntPtr hConsoleHandle, int dwMode);
-}
-"@ -ErrorAction Stop
-    }
-    $stdout = [AgentDockConsole]::GetStdHandle(-11)
-    $mode = 0
-    if (-not [AgentDockConsole]::GetConsoleMode($stdout, [ref]$mode)) { return $false }
-    $enableVirtualTerminal = 0x0004
-    return [AgentDockConsole]::SetConsoleMode($stdout, ($mode -bor $enableVirtualTerminal))
+    $consoleKey = "HKCU:\Console"
+    if (-not (Test-Path $consoleKey)) { New-Item -Path $consoleKey -Force | Out-Null }
+    New-ItemProperty -Path $consoleKey -Name "VirtualTerminalLevel" -Value 1 -PropertyType DWord -Force | Out-Null
   } catch {
     return $false
   }
+  return $false
 }
 
 function Prepare-ConsoleOutput {
